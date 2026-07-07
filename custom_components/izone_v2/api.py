@@ -83,6 +83,32 @@ class ZoneMode(IntEnum):
     CONSTANT = 5
 
 
+# Room sensor types (RoomSensorType_t) we care about
+ROOM_SENSOR_WIRELESS = 3  # RoomSensorCRFS - battery powered
+ROOM_SENSOR_NONE = 255
+
+
+def clean_string(value: Any) -> str:
+    """Strip firmware padding (NUL / 0xFF bytes) from a wire string."""
+    if value is None:
+        return ""
+    # Names are fixed-size buffers; content ends at the first NUL and any
+    # remaining bytes are 0xFF padding (decoded as 'ÿ' via latin-1).
+    return str(value).split("\x00", 1)[0].strip("\xff \t\r\n")
+
+
+def temp_from_wire(value: Any) -> float | None:
+    """Convert a wire temperature (Celsius x100) to degrees, if plausible."""
+    try:
+        temp = int(value) / 100
+    except (TypeError, ValueError):
+        return None
+    # Zones without a sensor report 0 / garbage.
+    if temp < -20 or temp > 60 or temp == 0:
+        return None
+    return temp
+
+
 class IZoneError(Exception):
     """Base error for the iZone API."""
 
@@ -223,11 +249,14 @@ class IZoneApi:
             ) from err
 
     async def async_command(self, payload: dict[str, Any]) -> None:
-        """POST a command to /iZoneCommandV2 and verify the OK result."""
+        """POST a command to /iZoneCommandV2 and verify the OK result.
+
+        Documented results: OK, InvalidRequest, InvalidUser, UserNotAllowed,
+        Error. Real bridges reply with v1-style bracing/quoting variants
+        ('{OK}', '"OK"'), so normalise before comparing.
+        """
         text = (await self._post("iZoneCommandV2", payload)).strip()
-        # Documented results: OK, InvalidRequest, InvalidUser,
-        # UserNotAllowed, Error.
-        if text != "OK" and '"OK"' not in text:
+        if text.strip('{}" \t\r\n') != "OK":
             raise IZoneCommandError(
                 f"Bridge {self.host} rejected command {payload}: {text[:200]!r}"
             )
@@ -246,12 +275,27 @@ class IZoneApi:
     async def async_set_system_setpoint(self, temp_c: float) -> None:
         # Wire format is degrees x100, limits 1500-3000 per the spec; the
         # caller is expected to clamp to the system's Eco limits.
-        await self.async_command({"SysSetpoint": int(round(temp_c * 100))})
+        await self.async_command({"SysSetpoint": round(temp_c * 100)})
 
     async def async_set_zone_mode(self, index: int, mode: ZoneMode) -> None:
         await self.async_command({"ZoneMode": {"Index": index, "Mode": int(mode)}})
 
     async def async_set_zone_setpoint(self, index: int, temp_c: float) -> None:
         await self.async_command(
-            {"ZoneSetpoint": {"Index": index, "Setpoint": int(round(temp_c * 100))}}
+            {"ZoneSetpoint": {"Index": index, "Setpoint": round(temp_c * 100)}}
         )
+
+    async def async_set_sleep_timer(self, minutes: int) -> None:
+        """Set the sleep timer in minutes; 0 turns it off."""
+        await self.async_command({"SysSleepTimer": int(minutes)})
+
+    async def async_set_isave(self, on: bool) -> None:
+        await self.async_command({"iSaveOn": 1 if on else 0})
+
+    async def async_set_zone_min_air(self, index: int, percent: int) -> None:
+        """Zone minimum damper opening, 0-100 in steps of 5."""
+        await self.async_command({"ZoneMinAir": {"Index": index, "MinAir": percent}})
+
+    async def async_set_zone_max_air(self, index: int, percent: int) -> None:
+        """Zone maximum damper opening, 0-100 in steps of 5."""
+        await self.async_command({"ZoneMaxAir": {"Index": index, "MaxAir": percent}})

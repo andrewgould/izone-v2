@@ -1,5 +1,10 @@
 # iZone V2 — Home Assistant custom integration
 
+[![CI](https://github.com/andrewgould/izone-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/andrewgould/izone-v2/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+[![Open your Home Assistant instance and open this repository inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=andrewgould&repository=izone-v2&category=integration)
+
 A replacement for Home Assistant's built-in [`izone`](https://www.home-assistant.io/integrations/izone/)
 integration that speaks the **current, officially documented iZone local API ("V2")**
 from the [iZone Developer Portal](https://developer.izone.com.au/), instead of the
@@ -63,8 +68,10 @@ with only `iZone`, keep using the built-in integration (v1 is all it speaks).
 **Manual:** copy `custom_components/izone_v2/` into your Home Assistant
 `config/custom_components/` directory and restart Home Assistant.
 
-**HACS:** add this repository as a custom repository (type: Integration),
-install "iZone V2 (Local API)", restart.
+**HACS:** click the "Open in HACS" badge above to open this repository directly
+in your own Home Assistant instance (requires the My Home Assistant integration,
+which is on by default), or add it manually as a custom repository
+(type: Integration). Then install "iZone V2 (Local API)" and restart.
 
 Then: *Settings → Devices & Services → Add Integration → iZone V2 (Local API)*.
 Bridges are discovered automatically (UDP broadcast); you can also enter the
@@ -75,8 +82,21 @@ IP address manually.
 | iZone concept | Home Assistant entity |
 |---|---|
 | AC unit | `climate` — off/cool/heat/heat-cool/fan-only/dry, fan low/med/high/auto/top, setpoint (0.5 °C steps, Eco-lock limits respected) |
-| Temperature-controlled zones (type *Climate*) | `climate` per zone — off (close) / fan-only (open) / heat-cool (climate control) + zone setpoint |
+| Temperature-controlled zones | `climate` per zone — off (close) / fan-only (open) / heat-cool (climate control) + zone setpoint |
 | Open/close & constant zones | `switch` per zone (on = damper open) |
+| iSave | `switch` (only if the system supports it) |
+| Supply / return air temperature | `sensor` |
+| Zone temperature | `sensor` per zone with a sensor |
+| Damper position | `sensor` per zone (diagnostic) |
+| Wireless sensor battery | `sensor` (full/half/empty, diagnostic) |
+| Filter warning, damper fault, sensor fault | `binary_sensor` (diagnostic; faults disabled by default) |
+| Sleep timer | `number` (0–120 min in 30-min steps) |
+| Zone min/max airflow | `number` per zone (config; disabled by default) |
+
+Each zone is its own Home Assistant **device**, named after the zone and with the
+zone name as its *suggested area* — so entities land in the right room by default
+and can be re-assigned per zone. Diagnostics download is supported for issue
+reports (Settings → Devices → iZone bridge → Download diagnostics).
 
 State refreshes every 30 s and immediately on the bridge's `iZoneChanged_*`
 UDP broadcasts. All requests are serialised — the bridge's embedded HTTP

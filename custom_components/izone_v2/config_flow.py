@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -81,7 +80,7 @@ class IZoneV2ConfigFlow(ConfigFlow, domain=DOMAIN):
                 return await self._async_create(self._discovered[uid].host)
             except IZoneError:
                 errors["base"] = "cannot_connect"
-            except Exception:  # noqa: BLE001 - show an error, not a 500
+            except Exception:
                 _LOGGER.exception("Unexpected error validating iZone bridge")
                 errors["base"] = "cannot_connect"
 
@@ -106,7 +105,7 @@ class IZoneV2ConfigFlow(ConfigFlow, domain=DOMAIN):
                 return await self._async_create(user_input[CONF_HOST])
             except IZoneError:
                 errors["base"] = "cannot_connect"
-            except Exception:  # noqa: BLE001 - show an error, not a 500
+            except Exception:
                 _LOGGER.exception("Unexpected error validating iZone bridge")
                 errors["base"] = "cannot_connect"
         return self.async_show_form(
