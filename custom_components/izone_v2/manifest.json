@@ -1,0 +1,12 @@
+{
+  "domain": "izone_v2",
+  "name": "iZone V2 (Local API)",
+  "codeowners": ["@andrewgould"],
+  "config_flow": true,
+  "documentation": "https://github.com/andrewgould/izone-v2",
+  "issue_tracker": "https://github.com/andrewgould/izone-v2/issues",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "version": "1.0.0"
+}

@@ -1,0 +1,26 @@
+{
+  "config": {
+    "step": {
+      "pick": {
+        "title": "Select iZone bridge",
+        "description": "Bridges supporting the V2 local API were discovered on your network.",
+        "data": {
+          "uid": "Bridge"
+        }
+      },
+      "manual": {
+        "title": "Connect to iZone bridge",
+        "description": "No V2-capable bridge was discovered automatically. Enter the IP address of your iZone bridge.",
+        "data": {
+          "host": "IP address"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect, or the bridge does not support the V2 local API"
+    },
+    "abort": {
+      "already_configured": "This iZone system is already configured"
+    }
+  }
+}
