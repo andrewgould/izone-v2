@@ -20,9 +20,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import SysFan, SysMode, ZoneMode, ZoneType
+from .api import SysFan, SysMode, ZoneMode, ZoneType, temp_from_wire
 from .coordinator import IZoneConfigEntry, IZoneCoordinator
-from .entity import IZoneEntity, clean_string, temp_from_wire
+from .entity import IZoneEntity, IZoneZoneEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class IZoneClimateBase(IZoneEntity, ClimateEntity):
+class IZoneClimateMixin(ClimateEntity):
     """Shared temperature-limit handling."""
 
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
@@ -113,7 +113,7 @@ class IZoneClimateBase(IZoneEntity, ClimateEntity):
         return min(max(temp, self.min_temp), self.max_temp)
 
 
-class IZoneAcClimate(IZoneClimateBase):
+class IZoneAcClimate(IZoneEntity, IZoneClimateMixin):
     """The AC unit itself."""
 
     _attr_name = None  # take the device name
@@ -175,12 +175,13 @@ class IZoneAcClimate(IZoneClimateBase):
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         temp = self._validated_setpoint(kwargs)
-        await self._command({"SysSetpoint": int(round(temp * 100))})
+        await self._command({"SysSetpoint": round(temp * 100)})
 
 
-class IZoneZoneClimate(IZoneClimateBase):
+class IZoneZoneClimate(IZoneZoneEntity, IZoneClimateMixin):
     """A temperature-controlled (ZoneType Auto) zone."""
 
+    _attr_name = None  # take the zone-device name
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
         | ClimateEntityFeature.TURN_ON
@@ -190,17 +191,8 @@ class IZoneZoneClimate(IZoneClimateBase):
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.FAN_ONLY, HVACMode.HEAT_COOL]
 
     def __init__(self, coordinator: IZoneCoordinator, index: int) -> None:
-        super().__init__(coordinator)
-        self._index = int(index)
+        super().__init__(coordinator, index)
         self._attr_unique_id = f"{coordinator.data.uid}_zone{self._index}"
-
-    @property
-    def zone(self) -> dict[str, Any]:
-        return self.coordinator.data.zones[self._index]
-
-    @property
-    def name(self) -> str:
-        return clean_string(self.zone.get("Name")) or f"Zone {self._index + 1}"
 
     @property
     def hvac_mode(self) -> HVACMode:
@@ -215,14 +207,6 @@ class IZoneZoneClimate(IZoneClimateBase):
     @property
     def target_temperature(self) -> float | None:
         return temp_from_wire(self.zone.get("Setpoint"))
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return {
-            "damper_position": self.zone.get("DmpPos"),
-            "airflow_min": self.zone.get("MinAir"),
-            "airflow_max": self.zone.get("MaxAir"),
-        }
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         mode = {
@@ -241,5 +225,5 @@ class IZoneZoneClimate(IZoneClimateBase):
     async def async_set_temperature(self, **kwargs: Any) -> None:
         temp = self._validated_setpoint(kwargs)
         await self._command(
-            {"ZoneSetpoint": {"Index": self._index, "Setpoint": int(round(temp * 100))}}
+            {"ZoneSetpoint": {"Index": self._index, "Setpoint": round(temp * 100)}}
         )
