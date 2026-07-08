@@ -54,7 +54,6 @@ class IZoneDamperFaultSensor(IZoneZoneEntity, BinarySensorEntity):
     _attr_name = "Damper fault"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: IZoneCoordinator, index: int) -> None:
         super().__init__(coordinator, index)
@@ -71,7 +70,6 @@ class IZoneSensorFaultSensor(IZoneZoneEntity, BinarySensorEntity):
     _attr_name = "Sensor fault"
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: IZoneCoordinator, index: int) -> None:
         super().__init__(coordinator, index)
