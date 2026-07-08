@@ -92,8 +92,13 @@ ZONE_BODIES = [
 class MockBridge:
     """A fake iZone bridge with firmware-realistic quirks."""
 
-    def __init__(self, command_reply: bytes = b"{OK}") -> None:
-        # Real bridges reply '{OK}', not the documented bare 'OK'.
+    def __init__(self, command_reply: bytes | list[bytes] = b"{OK}") -> None:
+        # Real bridges reply '{OK}', not the documented bare 'OK'. A list
+        # is consumed one reply per command call, holding the last entry
+        # once exhausted (for simulating BUSY-then-OK sequences).
+        self._replies = (
+            list(command_reply) if isinstance(command_reply, list) else None
+        )
         self.command_reply = command_reply
         self.commands: list[dict] = []
         app = web.Application()
@@ -114,6 +119,9 @@ class MockBridge:
     async def _command(self, request: web.Request) -> web.Response:
         assert request.content_type == "application/json"
         self.commands.append(await request.json())
+        if self._replies is not None:
+            reply = self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
+            return web.Response(body=reply)
         return web.Response(body=self.command_reply)
 
     @property
@@ -191,6 +199,34 @@ async def test_command_rejects_errors(reply: bytes) -> None:
             client = api.IZoneApi(session, mock.host)
             with pytest.raises(api.IZoneCommandError):
                 await client.async_command({"SysOn": 1})
+    finally:
+        await mock.server.close()
+
+
+async def test_command_retries_through_busy_then_succeeds(monkeypatch) -> None:
+    monkeypatch.setattr(api, "COMMAND_BUSY_DELAYS", (0, 0, 0, 0, 0))
+    mock = MockBridge(command_reply=[b"{BUSY}", b"{BUSY}", b"{OK}"])
+    await mock.server.start_server()
+    try:
+        async with ClientSession() as session:
+            client = api.IZoneApi(session, mock.host)
+            await client.async_command({"ZoneMode": {"Index": 1, "Mode": 3}})
+        assert len(mock.commands) == 3
+    finally:
+        await mock.server.close()
+
+
+async def test_command_raises_busy_error_after_exhausting_retries(monkeypatch) -> None:
+    monkeypatch.setattr(api, "COMMAND_BUSY_DELAYS", (0, 0, 0, 0, 0))
+    mock = MockBridge(command_reply=b"{BUSY}")
+    await mock.server.start_server()
+    try:
+        async with ClientSession() as session:
+            client = api.IZoneApi(session, mock.host)
+            with pytest.raises(api.IZoneBusyError):
+                await client.async_command({"ZoneMode": {"Index": 1, "Mode": 3}})
+        assert isinstance(api.IZoneBusyError("x"), api.IZoneCommandError)
+        assert len(mock.commands) == api.COMMAND_BUSY_RETRIES + 1
     finally:
         await mock.server.close()
 
