@@ -92,11 +92,19 @@ IP address manually.
 | Filter warning, damper fault, sensor fault | `binary_sensor` (diagnostic; faults disabled by default) |
 | Sleep timer | `number` (0–120 min in 30-min steps) |
 | Zone min/max airflow | `number` per zone (config; disabled by default) |
+| Favourites | `scene` per configured favourite (up to 9) |
 
 Each zone is its own Home Assistant **device**, named after the zone and with the
 zone name as its *suggested area* — so entities land in the right room by default
 and can be re-assigned per zone. Diagnostics download is supported for issue
 reports (Settings → Devices → iZone bridge → Download diagnostics).
+
+**Favourites** (saved AC mode/fan/setpoint + per-zone presets in the iZone app)
+show up as `scene` entities, named after the favourite. Only slots with a name
+set are exposed — empty slots are skipped. Favourites are discovered once when
+the integration starts, not on every poll, since they rarely change; reload the
+integration (Settings → Devices & Services → iZone V2 → ⋮ → Reload) after
+adding or renaming a favourite in the iZone app to pick up the change.
 
 State refreshes every 30 s and immediately on the bridge's `iZoneChanged_*`
 UDP broadcasts. All requests are serialised — the bridge's embedded HTTP
@@ -114,5 +122,10 @@ server can't handle concurrent requests.
 | Unit setpoint | `{"SysSetpoint":2250}` (°C ×100) |
 | Zone mode | `{"ZoneMode":{"Index":n,"Mode":1\|2\|3}}` (open, close, climate) |
 | Zone setpoint | `{"ZoneSetpoint":{"Index":n,"Setpoint":2250}}` |
+| Favourite *n* state | `POST /iZoneRequestV2` `{"iZoneV2Request":{"Type":3,"No":n,"No1":0}}` |
+| Trigger favourite *n* | `POST /iZoneCommandV2` `{"FavouriteSet":n+1}` (1-9) |
 
-All commands return the literal string `OK` on success.
+Commands normally return the literal string `OK` on success. Real bridges also
+reply with v1-style bracing (`{OK}`) and, while still actuating a previous
+command (e.g. a damper motor in transit), `{BUSY}` — which this integration
+retries automatically rather than treating as a failure.

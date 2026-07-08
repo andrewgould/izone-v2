@@ -87,6 +87,22 @@ ZONE_BODIES = [
         b'"ZoneType":1,"Mode":2,"Setpoint":0,"Temp":0,"SensorFault":0}}'
     ),
 ]
+# Favourite 0 is a configured scene; favourite 1 is an unused slot (empty
+# name, per the official Schedule reference datagram).
+FAVOURITE_BODIES = [
+    (
+        b'{"AirStreamDeviceUId":"000013170","DeviceType":"ASH",'
+        b'"SchedulesV2":{"Index":0,"Name":"Movie Night\x00\xff\xff\xff",'
+        b'"Enabled":0,"Mode":1,"Fan":2,"StartH":31,"StartM":63,'
+        b'"StopH":31,"StopM":63}}'
+    ),
+    (
+        b'{"AirStreamDeviceUId":"000013170","DeviceType":"ASH",'
+        b'"SchedulesV2":{"Index":1,"Name":"\x00\xff\xff\xff\xff\xff\xff\xff",'
+        b'"Enabled":0,"Mode":0,"Fan":0,"StartH":31,"StartM":63,'
+        b'"StopH":31,"StopM":63}}'
+    ),
+]
 
 
 class MockBridge:
@@ -112,6 +128,8 @@ class MockBridge:
             body = SYSTEM_BODY
         elif query["Type"] == api.REQUEST_ZONE:
             body = ZONE_BODIES[query["No"]]
+        elif query["Type"] == api.REQUEST_SCHEDULE:
+            body = FAVOURITE_BODIES[query["No"]]
         else:
             return web.Response(text="InvalidRequest")
         return web.Response(body=body, content_type="application/json")
@@ -147,6 +165,19 @@ async def test_query_decodes_non_utf8_body(bridge: MockBridge) -> None:
         zone = await client.async_get_zone(0)
         assert api.clean_string(zone["Name"]) == "Living"
         assert zone["ZoneType"] == api.ZoneType.AUTO
+
+        favourite = await client.async_get_favourite(0)
+        assert api.clean_string(favourite["Name"]) == "Movie Night"
+        empty_slot = await client.async_get_favourite(1)
+        assert api.clean_string(empty_slot["Name"]) == ""
+
+
+async def test_execute_favourite_sends_one_based_index(bridge: MockBridge) -> None:
+    async with ClientSession() as session:
+        client = api.IZoneApi(session, bridge.host)
+        await client.async_execute_favourite(0)
+        await client.async_execute_favourite(8)
+    assert bridge.commands == [{"FavouriteSet": 1}, {"FavouriteSet": 9}]
 
 
 async def test_commands_match_official_spec(bridge: MockBridge) -> None:

@@ -45,7 +45,11 @@ COMMAND_BUSY_DELAYS = (0.5, 1.0, 2.0, 4.0, 6.0)
 # iZoneV2Request "Type" values (iZone_JSON_datastrings.h v1.41)
 REQUEST_SYSTEM = 1  # -> {"SystemV2": {...}}
 REQUEST_ZONE = 2  # "No" = zone index -> {"ZonesV2": {...}}
-REQUEST_SCHEDULE = 3  # -> {"SchedulesV2": {...}}
+REQUEST_SCHEDULE = 3  # "No" = favourite index -> {"SchedulesV2": {...}}
+
+# FavouriteSet accepts 1-9 (wire value = 0-based index + 1); documented on
+# https://developer.izone.com.au/docs/reference/schedule/
+FAVOURITE_COUNT = 9
 
 
 class SysMode(IntEnum):
@@ -259,6 +263,20 @@ class IZoneApi:
                 f"Bridge {self.host} returned no ZonesV2 for zone {index}"
             ) from err
 
+    async def async_get_favourite(self, index: int) -> dict[str, Any]:
+        """Return the Schedule/Favourite datagram for a saved favourite.
+
+        0-based index (0-8); a favourite with an empty Name is an unused
+        slot.
+        """
+        data = await self.async_request(REQUEST_SCHEDULE, index)
+        try:
+            return data["SchedulesV2"]
+        except KeyError as err:
+            raise IZoneError(
+                f"Bridge {self.host} returned no SchedulesV2 for favourite {index}"
+            ) from err
+
     async def async_command(self, payload: dict[str, Any]) -> None:
         """POST a command to /iZoneCommandV2 and verify the OK result.
 
@@ -334,3 +352,11 @@ class IZoneApi:
     async def async_set_zone_max_air(self, index: int, percent: int) -> None:
         """Zone maximum damper opening, 0-100 in steps of 5."""
         await self.async_command({"ZoneMaxAir": {"Index": index, "MaxAir": percent}})
+
+    async def async_execute_favourite(self, index: int) -> None:
+        """Trigger a saved favourite (a "scene" in the iZone app) to apply.
+
+        0-based index (0-8); the documented "Start Schedule Manually"
+        command takes a 1-based value (1-9).
+        """
+        await self.async_command({"FavouriteSet": index + 1})
