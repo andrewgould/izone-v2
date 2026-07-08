@@ -35,6 +35,13 @@ NOTIFICATION_PREFIX = b"iZoneChanged"
 
 REQUEST_TIMEOUT = 10.0
 
+# Retry behaviour for '{BUSY}' command replies (bridge still actuating a
+# previous command, e.g. a damper motor). Delays are spaced out rather than
+# tight-looped since BUSY tends to clear after the physical actuation
+# finishes, not immediately.
+COMMAND_BUSY_RETRIES = 5
+COMMAND_BUSY_DELAYS = (0.5, 1.0, 2.0, 4.0, 6.0)
+
 # iZoneV2Request "Type" values (iZone_JSON_datastrings.h v1.41)
 REQUEST_SYSTEM = 1  # -> {"SystemV2": {...}}
 REQUEST_ZONE = 2  # "No" = zone index -> {"ZonesV2": {...}}
@@ -119,6 +126,10 @@ class IZoneConnectionError(IZoneError):
 
 class IZoneCommandError(IZoneError):
     """The bridge rejected a command (non-OK result)."""
+
+
+class IZoneBusyError(IZoneCommandError):
+    """The bridge stayed busy through every retry."""
 
 
 @dataclass(frozen=True)
@@ -253,13 +264,37 @@ class IZoneApi:
 
         Documented results: OK, InvalidRequest, InvalidUser, UserNotAllowed,
         Error. Real bridges reply with v1-style bracing/quoting variants
-        ('{OK}', '"OK"'), so normalise before comparing.
+        ('{OK}', '"OK"'), so normalise before comparing. Bridges also reply
+        '{BUSY}' while still actuating a previous command (e.g. a damper
+        motor mid-travel) - this is transient, not a rejection, so retry
+        with backoff instead of failing the whole action (scenes commonly
+        trigger several zone commands back-to-back and hit this).
         """
-        text = (await self._post("iZoneCommandV2", payload)).strip()
-        if text.strip('{}" \t\r\n') != "OK":
-            raise IZoneCommandError(
-                f"Bridge {self.host} rejected command {payload}: {text[:200]!r}"
-            )
+        last_reply = ""
+        for attempt in range(COMMAND_BUSY_RETRIES + 1):
+            text = (await self._post("iZoneCommandV2", payload)).strip()
+            normalised = text.strip('{}" \t\r\n')
+            if normalised == "OK":
+                return
+            last_reply = text
+            if normalised != "BUSY":
+                raise IZoneCommandError(
+                    f"Bridge {self.host} rejected command {payload}: {text[:200]!r}"
+                )
+            if attempt < COMMAND_BUSY_RETRIES:
+                _LOGGER.debug(
+                    "Bridge %s busy, retrying command %s in %.1fs (attempt %d/%d)",
+                    self.host,
+                    payload,
+                    COMMAND_BUSY_DELAYS[attempt],
+                    attempt + 1,
+                    COMMAND_BUSY_RETRIES,
+                )
+                await asyncio.sleep(COMMAND_BUSY_DELAYS[attempt])
+        raise IZoneBusyError(
+            f"Bridge {self.host} still busy after {COMMAND_BUSY_RETRIES} retries "
+            f"for command {payload}: {last_reply[:200]!r}"
+        )
 
     # -- convenience command wrappers -------------------------------------
 
