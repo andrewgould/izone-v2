@@ -89,10 +89,18 @@ IP address manually.
 | Zone temperature | `sensor` per zone with a sensor |
 | Damper position | `sensor` per zone (diagnostic) |
 | Wireless sensor battery | `sensor` (full/half/empty, diagnostic) |
-| Filter warning, damper fault, sensor fault | `binary_sensor` (diagnostic; faults disabled by default) |
+| Wireless sensor signal strength | `sensor` (full/half/quarter/none, diagnostic) |
+| Filter warning, damper fault, sensor fault | `binary_sensor` (diagnostic) |
 | Sleep timer | `number` (0–120 min in 30-min steps) |
 | Zone min/max airflow | `number` per zone (config; disabled by default) |
 | Favourites | `scene` per configured favourite (up to 9) |
+
+Wireless zone sensors (battery-powered) also expose signal strength and battery
+level, so a sensor drifting toward "none"/"empty" can be caught before it drops
+out entirely (shows up as the zone temperature going `unknown`). The damper/sensor
+fault binary sensors are enabled by default for the same reason — none of this
+costs extra requests to the bridge, since it all rides along in the zone data
+already being polled every 30 s.
 
 Each zone is its own Home Assistant **device**, named after the zone and with the
 zone name as its *suggested area* — so entities land in the right room by default

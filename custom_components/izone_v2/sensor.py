@@ -23,6 +23,9 @@ from .entity import IZoneEntity, IZoneZoneEntity
 # BatteryLevel_e
 BATTERY_LEVELS = {0: "full", 1: "half", 2: "empty"}
 
+# RfSignalLevel_e
+RF_SIGNAL_LEVELS = {0: "full", 1: "half", 2: "quarter", 3: "none"}
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -44,6 +47,8 @@ async def async_setup_entry(
             entities.append(IZoneZoneTempSensor(coordinator, index))
         if zone.get("SensType") == ROOM_SENSOR_WIRELESS and "BattVolt" in zone:
             entities.append(IZoneZoneBatterySensor(coordinator, index))
+        if zone.get("SensType") == ROOM_SENSOR_WIRELESS and "RfSignal" in zone:
+            entities.append(IZoneZoneRfSignalSensor(coordinator, index))
     async_add_entities(entities)
 
 
@@ -173,3 +178,26 @@ class IZoneZoneBatterySensor(IZoneZoneEntity, SensorEntity):
     @property
     def native_value(self) -> str | None:
         return BATTERY_LEVELS.get(self.zone.get("BattVolt"))
+
+
+class IZoneZoneRfSignalSensor(IZoneZoneEntity, SensorEntity):
+    """RF signal strength of a wireless zone sensor.
+
+    Tends to degrade before a sensor drops out entirely (goes "unknown" on
+    its temperature sensor) - watching this can give earlier warning than
+    waiting for the fault binary sensor to trip.
+    """
+
+    _attr_name = "Sensor signal"
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_options = list(RF_SIGNAL_LEVELS.values())
+    _attr_icon = "mdi:signal"
+
+    def __init__(self, coordinator: IZoneCoordinator, index: int) -> None:
+        super().__init__(coordinator, index)
+        self._attr_unique_id = f"{coordinator.data.uid}_zone{self._index}_rf_signal"
+
+    @property
+    def native_value(self) -> str | None:
+        return RF_SIGNAL_LEVELS.get(self.zone.get("RfSignal"))
