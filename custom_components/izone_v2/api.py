@@ -42,6 +42,14 @@ REQUEST_TIMEOUT = 10.0
 COMMAND_BUSY_RETRIES = 5
 COMMAND_BUSY_DELAYS = (0.5, 1.0, 2.0, 4.0, 6.0)
 
+# Retry behaviour for transient connection failures (timeout / reset /
+# refused). The bridge is a single-connection embedded server that
+# intermittently drops requests, especially right after a command while it
+# is actuating dampers - a single dropped poll shouldn't knock every entity
+# offline, so give it a couple of quick retries first.
+CONNECT_RETRIES = 2
+CONNECT_RETRY_DELAYS = (0.5, 1.5)
+
 # iZoneV2Request "Type" values (iZone_JSON_datastrings.h v1.41)
 REQUEST_SYSTEM = 1  # -> {"SystemV2": {...}}
 REQUEST_ZONE = 2  # "No" = zone index -> {"ZonesV2": {...}}
@@ -97,6 +105,18 @@ class ZoneMode(IntEnum):
 # Room sensor types (RoomSensorType_t) we care about
 ROOM_SENSOR_WIRELESS = 3  # RoomSensorCRFS - battery powered
 ROOM_SENSOR_NONE = 255
+
+
+def _err_str(err: Exception | None) -> str:
+    """A human-readable message for an exception.
+
+    Several exceptions we catch (notably asyncio.TimeoutError) stringify to
+    an empty string, which produced useless "Error talking to bridge: "
+    log lines - fall back to the class name so the cause is visible.
+    """
+    if err is None:
+        return "unknown error"
+    return str(err) or type(err).__name__
 
 
 def clean_string(value: Any) -> str:
@@ -211,15 +231,7 @@ class IZoneApi:
     async def _post(self, path: str, payload: dict[str, Any]) -> str:
         url = f"http://{self.host}/{path}"
         async with self._lock:
-            try:
-                async with asyncio.timeout(REQUEST_TIMEOUT):
-                    async with self._session.post(url, json=payload) as resp:
-                        resp.raise_for_status()
-                        raw = await resp.read()
-            except (aiohttp.ClientError, TimeoutError, OSError) as err:
-                raise IZoneConnectionError(
-                    f"Error talking to iZone bridge at {self.host}: {err}"
-                ) from err
+            raw = await self._request_raw(url, payload)
         try:
             return raw.decode("utf-8")
         except UnicodeDecodeError:
@@ -227,6 +239,36 @@ class IZoneApi:
             # 0xFF/0x00 bytes, which is not valid UTF-8. latin-1 maps every
             # byte, so decoding can't fail; padding is stripped later.
             return raw.decode("latin-1")
+
+    async def _request_raw(self, url: str, payload: dict[str, Any]) -> bytes:
+        """POST with retries for transient connection failures.
+
+        The lock is held by the caller, so retries stay serialised. All the
+        commands we send are idempotent (SysOn/SysMode/ZoneMode/FavouriteSet
+        set an absolute target), so re-sending after a timeout can't cause a
+        double-toggle.
+        """
+        last_err: Exception | None = None
+        for attempt in range(CONNECT_RETRIES + 1):
+            try:
+                async with asyncio.timeout(REQUEST_TIMEOUT):
+                    async with self._session.post(url, json=payload) as resp:
+                        resp.raise_for_status()
+                        return await resp.read()
+            except (aiohttp.ClientError, TimeoutError, OSError) as err:
+                last_err = err
+                if attempt < CONNECT_RETRIES:
+                    _LOGGER.debug(
+                        "Request to %s failed (%s), retry %d/%d",
+                        url,
+                        _err_str(err),
+                        attempt + 1,
+                        CONNECT_RETRIES,
+                    )
+                    await asyncio.sleep(CONNECT_RETRY_DELAYS[attempt])
+        raise IZoneConnectionError(
+            f"Error talking to iZone bridge at {self.host}: {_err_str(last_err)}"
+        ) from last_err
 
     async def async_request(self, req_type: int, no: int = 0) -> dict[str, Any]:
         """POST /iZoneRequestV2 and return the parsed JSON response."""
@@ -291,6 +333,7 @@ class IZoneApi:
         last_reply = ""
         for attempt in range(COMMAND_BUSY_RETRIES + 1):
             text = (await self._post("iZoneCommandV2", payload)).strip()
+            _LOGGER.debug("Bridge %s command %s -> %r", self.host, payload, text)
             normalised = text.strip('{}" \t\r\n')
             if normalised == "OK":
                 return

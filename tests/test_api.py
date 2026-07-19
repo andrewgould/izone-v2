@@ -108,7 +108,11 @@ FAVOURITE_BODIES = [
 class MockBridge:
     """A fake iZone bridge with firmware-realistic quirks."""
 
-    def __init__(self, command_reply: bytes | list[bytes] = b"{OK}") -> None:
+    def __init__(
+        self,
+        command_reply: bytes | list[bytes] = b"{OK}",
+        command_fail_times: int = 0,
+    ) -> None:
         # Real bridges reply '{OK}', not the documented bare 'OK'. A list
         # is consumed one reply per command call, holding the last entry
         # once exhausted (for simulating BUSY-then-OK sequences).
@@ -116,7 +120,11 @@ class MockBridge:
             list(command_reply) if isinstance(command_reply, list) else None
         )
         self.command_reply = command_reply
+        # Return HTTP 503 for the first N command calls, to simulate the
+        # bridge transiently dropping requests.
+        self._command_fail_times = command_fail_times
         self.commands: list[dict] = []
+        self.command_calls = 0
         app = web.Application()
         app.router.add_post("/iZoneRequestV2", self._request)
         app.router.add_post("/iZoneCommandV2", self._command)
@@ -135,6 +143,10 @@ class MockBridge:
         return web.Response(body=body, content_type="application/json")
 
     async def _command(self, request: web.Request) -> web.Response:
+        self.command_calls += 1
+        if self._command_fail_times > 0:
+            self._command_fail_times -= 1
+            return web.Response(status=503)
         assert request.content_type == "application/json"
         self.commands.append(await request.json())
         if self._replies is not None:
@@ -262,8 +274,32 @@ async def test_command_raises_busy_error_after_exhausting_retries(monkeypatch) -
         await mock.server.close()
 
 
-async def test_connection_error_raises() -> None:
+async def test_post_retries_transient_connection_failure(monkeypatch) -> None:
+    monkeypatch.setattr(api, "CONNECT_RETRY_DELAYS", (0, 0))
+    # Bridge drops the first request (503), then answers - the retry should
+    # ride over it so a single blip doesn't fail the call.
+    mock = MockBridge(command_fail_times=1)
+    await mock.server.start_server()
+    try:
+        async with ClientSession() as session:
+            client = api.IZoneApi(session, mock.host)
+            await client.async_command({"SysOn": 1})  # must not raise
+        assert mock.command_calls == 2  # one failure + one success
+    finally:
+        await mock.server.close()
+
+
+async def test_connection_error_raises(monkeypatch) -> None:
+    monkeypatch.setattr(api, "CONNECT_RETRY_DELAYS", (0, 0))
     async with ClientSession() as session:
         client = api.IZoneApi(session, "127.0.0.1:1")  # nothing listening
         with pytest.raises(api.IZoneConnectionError):
             await client.async_get_system()
+
+
+def test_err_str_falls_back_to_type_name() -> None:
+    # asyncio.TimeoutError stringifies to '' - the cause of the empty
+    # "Error talking to iZone bridge:" log lines seen in the field.
+    assert api._err_str(TimeoutError()) == "TimeoutError"
+    assert api._err_str(ValueError("boom")) == "boom"
+    assert api._err_str(None) == "unknown error"

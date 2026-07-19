@@ -57,6 +57,16 @@ class IZoneFavouriteScene(IZoneEntity, Scene):
         self._attr_name = name
         self._attr_unique_id = f"{coordinator.data.uid}_favourite{index}"
 
+    @property
+    def available(self) -> bool:
+        # A scene is a fire-and-forget action, not a state readout. Keep it
+        # triggerable even when the last poll blipped (the bridge drops the
+        # odd request); the command path retries transient failures and
+        # surfaces a clear error if the bridge is genuinely unreachable.
+        # Without this, a single timed-out poll would flip the scene to
+        # "unavailable" and silently drop scene.turn_on calls.
+        return True
+
     async def async_activate(self, **kwargs: Any) -> None:
         try:
             await self.coordinator.api.async_execute_favourite(self._index)
