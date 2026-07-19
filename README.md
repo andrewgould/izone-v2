@@ -137,3 +137,10 @@ Commands normally return the literal string `OK` on success. Real bridges also
 reply with v1-style bracing (`{OK}`) and, while still actuating a previous
 command (e.g. a damper motor in transit), `{BUSY}` — which this integration
 retries automatically rather than treating as a failure.
+
+The bridge is a single-connection embedded server and occasionally drops or
+times out a request (especially just after a command, while it's actuating).
+Both reads and commands are retried a couple of times before being reported as
+a failure, so a single dropped request doesn't knock every entity offline.
+Scene entities stay available regardless of poll state, since triggering a
+favourite doesn't depend on fresh data.
