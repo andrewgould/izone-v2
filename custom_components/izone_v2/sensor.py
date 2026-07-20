@@ -39,6 +39,7 @@ async def async_setup_entry(
         IZoneReturnTempSensor(coordinator),
         IZoneAcErrorSensor(coordinator),
         IZoneSleepRemainingSensor(coordinator),
+        IZoneCommandFailuresSensor(coordinator),
     ]
     for zone in coordinator.data.zones:
         index = zone["Index"]
@@ -120,6 +121,27 @@ class IZoneSleepRemainingSensor(IZoneEntity, SensorEntity):
             return int(self.system.get("SleepTimerM", 0))
         except (TypeError, ValueError):
             return 0
+
+
+class IZoneCommandFailuresSensor(IZoneEntity, SensorEntity):
+    """Count of failed commands in the recent window.
+
+    A numeric companion to the "Bridge overloaded" binary sensor, for
+    dashboards and numeric-threshold automations.
+    """
+
+    _attr_name = "Command failures"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:alert-octagon-outline"
+
+    def __init__(self, coordinator: IZoneCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.data.uid}_command_failures"
+
+    @property
+    def native_value(self) -> int:
+        return self.coordinator.recent_command_failures
 
 
 class IZoneZoneTempSensor(IZoneZoneEntity, SensorEntity):

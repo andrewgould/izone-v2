@@ -30,4 +30,6 @@ async def async_get_config_entry_diagnostics(
         "zones": coordinator.data.zones,
         "favourites": favourites,
         "last_update_success": coordinator.last_update_success,
+        "recent_command_failures": coordinator.recent_command_failures,
+        "bridge_overloaded": coordinator.bridge_overloaded,
     }

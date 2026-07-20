@@ -260,7 +260,7 @@ async def test_command_retries_through_busy_then_succeeds(monkeypatch) -> None:
 
 
 async def test_command_raises_busy_error_after_exhausting_retries(monkeypatch) -> None:
-    monkeypatch.setattr(api, "COMMAND_BUSY_DELAYS", (0, 0, 0, 0, 0))
+    monkeypatch.setattr(api, "COMMAND_BUSY_DELAYS", (0,) * api.COMMAND_BUSY_RETRIES)
     mock = MockBridge(command_reply=b"{BUSY}")
     await mock.server.start_server()
     try:
@@ -272,6 +272,42 @@ async def test_command_raises_busy_error_after_exhausting_retries(monkeypatch) -
         assert len(mock.commands) == api.COMMAND_BUSY_RETRIES + 1
     finally:
         await mock.server.close()
+
+
+async def test_command_result_callback_reports_success(bridge: MockBridge) -> None:
+    results: list[bool] = []
+    async with ClientSession() as session:
+        client = api.IZoneApi(session, bridge.host)
+        client.on_command_result = results.append
+        await client.async_command({"SysOn": 1})
+    assert results == [True]
+
+
+async def test_command_result_callback_reports_busy_failure(monkeypatch) -> None:
+    monkeypatch.setattr(api, "COMMAND_BUSY_DELAYS", (0,) * api.COMMAND_BUSY_RETRIES)
+    results: list[bool] = []
+    mock = MockBridge(command_reply=b"{BUSY}")
+    await mock.server.start_server()
+    try:
+        async with ClientSession() as session:
+            client = api.IZoneApi(session, mock.host)
+            client.on_command_result = results.append
+            with pytest.raises(api.IZoneBusyError):
+                await client.async_command({"SysOn": 1})
+    finally:
+        await mock.server.close()
+    assert results == [False]
+
+
+async def test_command_result_callback_reports_connection_failure(monkeypatch) -> None:
+    monkeypatch.setattr(api, "CONNECT_RETRY_DELAYS", (0, 0))
+    results: list[bool] = []
+    async with ClientSession() as session:
+        client = api.IZoneApi(session, "127.0.0.1:1")  # nothing listening
+        client.on_command_result = results.append
+        with pytest.raises(api.IZoneConnectionError):
+            await client.async_command({"SysOn": 1})
+    assert results == [False]
 
 
 async def test_post_retries_transient_connection_failure(monkeypatch) -> None:
