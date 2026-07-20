@@ -51,6 +51,16 @@ COMMAND_BUSY_DELAYS = (0.5, 1.0, 2.0, 3.0, 5.0, 8.0)
 CONNECT_RETRIES = 2
 CONNECT_RETRY_DELAYS = (0.5, 1.5)
 
+# HTTP endpoints.
+REQUEST_ENDPOINT = "iZoneRequestV2"
+COMMAND_ENDPOINT = "iZoneCommandV2"
+
+# Settle time held (with the request lock) after each command, so a burst of
+# commands - e.g. an HA scene setting every zone at once - is paced instead of
+# hammering the single-connection controller into a {BUSY} cascade. Reads
+# (polls) are not paced.
+COMMAND_SETTLE_DELAY = 0.3
+
 # iZoneV2Request "Type" values (iZone_JSON_datastrings.h v1.41)
 REQUEST_SYSTEM = 1  # -> {"SystemV2": {...}}
 REQUEST_ZONE = 2  # "No" = zone index -> {"ZonesV2": {...}}
@@ -118,6 +128,37 @@ def _err_str(err: Exception | None) -> str:
     if err is None:
         return "unknown error"
     return str(err) or type(err).__name__
+
+
+def favourite_target_reached(
+    favourite: dict[str, Any], zones: list[dict[str, Any]]
+) -> bool:
+    """True if live zones match a favourite's stored per-zone config.
+
+    Used to confirm a favourite ("scene") actually applied. Compares zone
+    Mode for every real zone, plus Setpoint for zones the favourite drives
+    in climate (Auto) mode - a closed zone keeps its own setpoint, so
+    comparing it there would give false mismatches. Constant/bypass zones
+    (controller-managed) and zones reporting a sensor fault (can't be
+    verified) are skipped.
+    """
+    fav_zones = favourite.get("Zones") or []
+    for index, zone in enumerate(zones):
+        if index >= len(fav_zones):
+            break
+        if int(zone.get("ZoneType", 0)) == ZoneType.CONSTANT:
+            continue
+        if zone.get("SensorFault"):
+            continue
+        target = fav_zones[index]
+        target_mode = int(target.get("Mode", -2))
+        if int(zone.get("Mode", -1)) != target_mode:
+            return False
+        if target_mode == ZoneMode.AUTO and int(zone.get("Setpoint", -1)) != int(
+            target.get("Setpoint", -2)
+        ):
+            return False
+    return True
 
 
 def clean_string(value: Any) -> str:
@@ -237,6 +278,11 @@ class IZoneApi:
         url = f"http://{self.host}/{path}"
         async with self._lock:
             raw = await self._request_raw(url, payload)
+            # Pace commands: keep the lock a moment after a write so queued
+            # commands (an HA scene setting every zone) are spaced out rather
+            # than hammering the controller into a {BUSY} cascade.
+            if path == COMMAND_ENDPOINT and COMMAND_SETTLE_DELAY:
+                await asyncio.sleep(COMMAND_SETTLE_DELAY)
         try:
             return raw.decode("utf-8")
         except UnicodeDecodeError:
@@ -278,7 +324,7 @@ class IZoneApi:
     async def async_request(self, req_type: int, no: int = 0) -> dict[str, Any]:
         """POST /iZoneRequestV2 and return the parsed JSON response."""
         text = await self._post(
-            "iZoneRequestV2",
+            REQUEST_ENDPOINT,
             {"iZoneV2Request": {"Type": req_type, "No": no, "No1": 0}},
         )
         try:
@@ -350,7 +396,7 @@ class IZoneApi:
         """
         last_reply = ""
         for attempt in range(COMMAND_BUSY_RETRIES + 1):
-            text = (await self._post("iZoneCommandV2", payload)).strip()
+            text = (await self._post(COMMAND_ENDPOINT, payload)).strip()
             _LOGGER.debug("Bridge %s command %s -> %r", self.host, payload, text)
             normalised = text.strip('{}" \t\r\n')
             if normalised == "OK":

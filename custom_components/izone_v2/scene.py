@@ -7,6 +7,8 @@ Assistant calls a scene.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
 from homeassistant.components.scene import Scene
@@ -14,9 +16,17 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import FAVOURITE_COUNT, IZoneError, clean_string
+from .api import (
+    FAVOURITE_COUNT,
+    IZoneError,
+    clean_string,
+    favourite_target_reached,
+)
+from .const import SCENE_VERIFY_DELAY, SCENE_VERIFY_RETRIES
 from .coordinator import IZoneConfigEntry, IZoneCoordinator
 from .entity import IZoneEntity
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -68,8 +78,41 @@ class IZoneFavouriteScene(IZoneEntity, Scene):
         return True
 
     async def async_activate(self, **kwargs: Any) -> None:
+        # Fetch the favourite's current target so we can confirm it applied.
+        # (Fetched fresh in case it was edited in the iZone app since setup.)
         try:
-            await self.coordinator.api.async_execute_favourite(self._index)
-        except IZoneError as err:
-            raise HomeAssistantError(str(err)) from err
+            target = await self.coordinator.api.async_get_favourite(self._index)
+        except IZoneError:
+            target = None
+
+        for attempt in range(SCENE_VERIFY_RETRIES + 1):
+            try:
+                await self.coordinator.api.async_execute_favourite(self._index)
+            except IZoneError as err:
+                raise HomeAssistantError(str(err)) from err
+
+            if target is None:
+                # Can't verify without the target; fall back to a single shot.
+                break
+
+            # Give the controller time to actuate, then read back and confirm.
+            await asyncio.sleep(SCENE_VERIFY_DELAY)
+            await self.coordinator.async_refresh()
+            if favourite_target_reached(target, self.coordinator.data.zones):
+                return
+
+            _LOGGER.debug(
+                "iZone favourite '%s' not fully applied yet (attempt %d/%d)",
+                self._attr_name,
+                attempt + 1,
+                SCENE_VERIFY_RETRIES + 1,
+            )
+        else:
+            _LOGGER.warning(
+                "iZone favourite '%s' could not be confirmed applied after %d "
+                "attempts - the controller may be busy or a zone sensor faulty",
+                self._attr_name,
+                SCENE_VERIFY_RETRIES + 1,
+            )
+
         await self.coordinator.async_request_refresh()

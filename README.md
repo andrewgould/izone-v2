@@ -114,8 +114,13 @@ reports (Settings → Devices → iZone bridge → Download diagnostics).
 The iZone bridge is a single-connection embedded server. If it's hit with a
 burst of commands — e.g. a Home Assistant scene that sets many zone climate
 entities at once — it can fall behind and reply `{BUSY}` to everything until it
-catches up. Commands are retried with backoff, but if the bridge stays busy the
-command is eventually abandoned (and logged) rather than queued forever.
+catches up. Commands are **paced** (a short gap is held between them) to soften
+these bursts, and retried with backoff; but if the bridge stays busy the command
+is eventually abandoned (and logged) rather than queued forever. Note that
+`{BUSY}` often originates with the wall controller (the actual brain), which the
+bridge relays — so persistent busy states can point at the controller or a
+faulty zone (e.g. a climate zone whose wireless sensor keeps dropping out),
+not the bridge itself.
 
 The **Bridge overloaded** binary sensor turns on when commands keep failing
 (≥3 failures within 5 minutes), and the **Command failures** sensor exposes the
@@ -148,6 +153,13 @@ set are exposed — empty slots are skipped. Favourites are discovered once when
 the integration starts, not on every poll, since they rarely change; reload the
 integration (Settings → Devices & Services → iZone V2 → ⋮ → Reload) after
 adding or renaming a favourite in the iZone app to pick up the change.
+
+When a favourite scene is activated, the integration **reads the zones back and
+confirms** they match the favourite's stored config, re-applying a couple of
+times if they don't (zones with a faulty sensor, and controller-managed
+constant zones, are skipped). If it still can't confirm after retrying, it logs
+a warning — so a scene that quietly failed to take is visible rather than
+silent.
 
 State refreshes every 30 s and immediately on the bridge's `iZoneChanged_*`
 UDP broadcasts. All requests are serialised — the bridge's embedded HTTP

@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import izone_api as api
 import pytest
 from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestServer
+
+
+@pytest.fixture(autouse=True)
+def _no_command_settle(monkeypatch):
+    """Zero the command pacing delay so the suite doesn't sleep for real."""
+    monkeypatch.setattr(api, "COMMAND_SETTLE_DELAY", 0)
+
 
 # --- pure helpers ----------------------------------------------------------
 
@@ -50,6 +59,44 @@ def test_temp_from_wire() -> None:
     assert api.temp_from_wire(None) is None
     assert api.temp_from_wire("bogus") is None
     assert api.temp_from_wire(9900) is None  # implausible
+
+
+def _fav(*zones: tuple[int, int]) -> dict:
+    return {"Zones": [{"Mode": m, "Setpoint": s} for m, s in zones]}
+
+
+def _zone(mode: int, setpoint: int, *, ztype: int = 3, fault: int = 0) -> dict:
+    return {"Mode": mode, "Setpoint": setpoint, "ZoneType": ztype, "SensorFault": fault}
+
+
+def test_favourite_target_reached_all_match() -> None:
+    fav = _fav((3, 2100), (2, 2300), (3, 1800))
+    zones = [_zone(3, 2100), _zone(2, 2300), _zone(3, 1800)]
+    assert api.favourite_target_reached(fav, zones)
+
+
+def test_favourite_target_reached_auto_setpoint_mismatch() -> None:
+    assert not api.favourite_target_reached(_fav((3, 2100)), [_zone(3, 2000)])
+
+
+def test_favourite_target_reached_mode_mismatch() -> None:
+    assert not api.favourite_target_reached(_fav((3, 2100)), [_zone(2, 2100)])
+
+
+def test_favourite_target_reached_closed_zone_ignores_setpoint() -> None:
+    # Mode matches (close); setpoint differs but is not meaningful when closed.
+    assert api.favourite_target_reached(_fav((2, 2300)), [_zone(2, 2100)])
+
+
+def test_favourite_target_reached_skips_constant_and_faulted() -> None:
+    fav = _fav((3, 2100), (3, 2100))
+    zones = [_zone(2, 999, ztype=api.ZoneType.CONSTANT), _zone(2, 999, fault=1)]
+    assert api.favourite_target_reached(fav, zones)
+
+
+def test_favourite_target_reached_ignores_zones_beyond_favourite() -> None:
+    # System has more zones than the favourite defines - don't over-compare.
+    assert api.favourite_target_reached(_fav((3, 2100)), [_zone(3, 2100), _zone(2, 0)])
 
 
 def test_enums_match_official_spec() -> None:
@@ -339,3 +386,23 @@ def test_err_str_falls_back_to_type_name() -> None:
     assert api._err_str(TimeoutError()) == "TimeoutError"
     assert api._err_str(ValueError("boom")) == "boom"
     assert api._err_str(None) == "unknown error"
+
+
+async def test_commands_are_paced_but_reads_are_not(
+    bridge: MockBridge, monkeypatch
+) -> None:
+    monkeypatch.setattr(api, "COMMAND_SETTLE_DELAY", 0.05)
+    sleeps: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        await real_sleep(0)
+
+    monkeypatch.setattr(api.asyncio, "sleep", fake_sleep)
+    async with ClientSession() as session:
+        client = api.IZoneApi(session, bridge.host)
+        await client.async_get_system()  # a read - must not be paced
+        assert 0.05 not in sleeps
+        await client.async_command({"SysOn": 1})  # a command - must be paced
+        assert 0.05 in sleeps
