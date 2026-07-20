@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any
@@ -39,8 +40,8 @@ REQUEST_TIMEOUT = 10.0
 # previous command, e.g. a damper motor). Delays are spaced out rather than
 # tight-looped since BUSY tends to clear after the physical actuation
 # finishes, not immediately.
-COMMAND_BUSY_RETRIES = 5
-COMMAND_BUSY_DELAYS = (0.5, 1.0, 2.0, 4.0, 6.0)
+COMMAND_BUSY_RETRIES = 6
+COMMAND_BUSY_DELAYS = (0.5, 1.0, 2.0, 3.0, 5.0, 8.0)
 
 # Retry behaviour for transient connection failures (timeout / reset /
 # refused). The bridge is a single-connection embedded server that
@@ -227,6 +228,10 @@ class IZoneApi:
         # The bridge is a small embedded HTTP server and does not tolerate
         # concurrent requests - serialise everything.
         self._lock = asyncio.Lock()
+        # Optional hook, invoked with True after a command succeeds and False
+        # after one fails (busy-exhaustion or connection error). The
+        # coordinator uses this to track bridge-overload health.
+        self.on_command_result: Callable[[bool], None] | None = None
 
     async def _post(self, path: str, payload: dict[str, Any]) -> str:
         url = f"http://{self.host}/{path}"
@@ -320,6 +325,19 @@ class IZoneApi:
             ) from err
 
     async def async_command(self, payload: dict[str, Any]) -> None:
+        """Send a command, reporting success/failure for health tracking."""
+        try:
+            await self._send_command(payload)
+        except IZoneError:
+            self._report_command_result(ok=False)
+            raise
+        self._report_command_result(ok=True)
+
+    def _report_command_result(self, ok: bool) -> None:
+        if self.on_command_result is not None:
+            self.on_command_result(ok)
+
+    async def _send_command(self, payload: dict[str, Any]) -> None:
         """POST a command to /iZoneCommandV2 and verify the OK result.
 
         Documented results: OK, InvalidRequest, InvalidUser, UserNotAllowed,

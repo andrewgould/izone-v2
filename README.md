@@ -91,6 +91,8 @@ IP address manually.
 | Wireless sensor battery | `sensor` (full/half/empty, diagnostic) |
 | Wireless sensor signal strength | `sensor` (full/half/quarter/none, diagnostic) |
 | Filter warning, damper fault, sensor fault | `binary_sensor` (diagnostic) |
+| Bridge overloaded | `binary_sensor` (diagnostic) — on when commands are repeatedly failing |
+| Command failures (recent) | `sensor` (diagnostic) — count of failed commands in the last 5 min |
 | Sleep timer | `number` (0–120 min in 30-min steps) |
 | Zone min/max airflow | `number` per zone (config; disabled by default) |
 | Favourites | `scene` per configured favourite (up to 9) |
@@ -106,6 +108,39 @@ Each zone is its own Home Assistant **device**, named after the zone and with th
 zone name as its *suggested area* — so entities land in the right room by default
 and can be re-assigned per zone. Diagnostics download is supported for issue
 reports (Settings → Devices → iZone bridge → Download diagnostics).
+
+### Recovering a wedged bridge
+
+The iZone bridge is a single-connection embedded server. If it's hit with a
+burst of commands — e.g. a Home Assistant scene that sets many zone climate
+entities at once — it can fall behind and reply `{BUSY}` to everything until it
+catches up. Commands are retried with backoff, but if the bridge stays busy the
+command is eventually abandoned (and logged) rather than queued forever.
+
+The **Bridge overloaded** binary sensor turns on when commands keep failing
+(≥3 failures within 5 minutes), and the **Command failures** sensor exposes the
+running count. Use either to drive a recovery automation — for example, power-
+cycling the hub via a smart plug:
+
+```yaml
+automation:
+  - alias: Power-cycle iZone hub when overloaded
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.izone_XXXXXXXXX_bridge_overloaded
+        to: "on"
+        for: "00:02:00"
+    actions:
+      - action: switch.turn_off
+        target: { entity_id: switch.izone_hub_power }
+      - delay: "00:00:20"
+      - action: switch.turn_on
+        target: { entity_id: switch.izone_hub_power }
+```
+
+To avoid triggering the overload in the first place, prefer this integration's
+own **favourite `scene` entities** (a single `FavouriteSet` command the bridge
+applies internally) over HA-native scenes that set every zone individually.
 
 **Favourites** (saved AC mode/fan/setpoint + per-zone presets in the iZone app)
 show up as `scene` entities, named after the favourite. Only slots with a name

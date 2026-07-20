@@ -22,7 +22,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up warning/fault binary sensors."""
     coordinator = entry.runtime_data
-    entities: list[BinarySensorEntity] = [IZoneFilterWarningSensor(coordinator)]
+    entities: list[BinarySensorEntity] = [
+        IZoneFilterWarningSensor(coordinator),
+        IZoneBridgeOverloadedSensor(coordinator),
+    ]
     for zone in coordinator.data.zones:
         index = zone["Index"]
         entities.append(IZoneDamperFaultSensor(coordinator, index))
@@ -46,6 +49,31 @@ class IZoneFilterWarningSensor(IZoneEntity, BinarySensorEntity):
     def is_on(self) -> bool:
         # Documented values for "Warnings": "none", "filter"
         return clean_string(self.system.get("Warnings")).lower() == "filter"
+
+
+class IZoneBridgeOverloadedSensor(IZoneEntity, BinarySensorEntity):
+    """On when commands are repeatedly failing (bridge wedged/overloaded).
+
+    Intended as an automation trigger: e.g. power-cycle the iZone hub /
+    controller when this stays on. It reflects command failures (busy
+    exhaustion or connection errors), not poll blips.
+    """
+
+    _attr_name = "Bridge overloaded"
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: IZoneCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.data.uid}_bridge_overloaded"
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.bridge_overloaded
+
+    @property
+    def extra_state_attributes(self) -> dict[str, int]:
+        return {"recent_command_failures": self.coordinator.recent_command_failures}
 
 
 class IZoneDamperFaultSensor(IZoneZoneEntity, BinarySensorEntity):
