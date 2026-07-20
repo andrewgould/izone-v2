@@ -21,3 +21,9 @@ POLL_INTERVAL = 30
 # hub does - letting an automation power-cycle the hardware.
 COMMAND_FAILURE_WINDOW = 300
 OVERLOAD_THRESHOLD = 3
+
+# After triggering a favourite ("scene"), how many times to re-apply if the
+# zones don't match the favourite's stored config, and how long to wait for
+# the controller to settle before reading back.
+SCENE_VERIFY_RETRIES = 2
+SCENE_VERIFY_DELAY = 2.0
