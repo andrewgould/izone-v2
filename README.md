@@ -22,8 +22,10 @@ library) against the Developer Portal documentation found:
 - **Discovery** — UDP broadcast `IASD` to `255.255.255.255:12107` matches the
   current official documentation exactly.
 - **Change notifications** — listening on UDP 7005 for `iZoneChanged_*` matches
-  the official v1 spec (in practice these are a periodic content-free heartbeat,
-  so they're used only as a refresh hint, not a reliable change signal).
+  the official v1 spec. A controlled test showed these are change-driven on this
+  firmware (a real change triggers a content-free broadcast ~3 s later; a no-op
+  triggers none); they just look ~60 s-periodic in passive capture because
+  routine sensor-reading updates keep firing them.
 - **v1 commands** — every command `pizone` sends (`POST /SystemON`,
   `/SystemMODE`, `/SystemFAN`, `/UnitSetpoint`, `/ZoneCommand`,
   `/AirMinCommand`, `/AirMaxCommand`, `/SleepTimer`, `/FreeAir`) matches the
@@ -173,12 +175,13 @@ back (given up after 15 minutes). So a single flaky wireless sensor no longer
 blocks the rest of the scene.
 
 State refreshes every 30 s. The bridge's `iZoneChanged_*` UDP 7005 broadcasts
-also nudge a refresh, but in captured traffic they're a content-free periodic
-(~60 s) heartbeat that fires all categories every cycle regardless of change —
-so they're treated as a best-effort "poll now" hint, not the source of truth,
-and the integration behaves correctly with or without them. All requests are
-serialised — the bridge's embedded HTTP server can't handle concurrent
-requests.
+also nudge a prompt refresh — a controlled test showed a real state change
+triggers a content-free broadcast ~3 s later (a no-op command triggers none), so
+they're change-driven on this firmware and only look ~60 s-periodic in passive
+capture because routine sensor-reading updates keep firing them. They're treated
+as a best-effort hint on top of the 30 s poll, which remains the fallback so
+state stays correct if a broadcast is missed. All requests are serialised — the
+bridge's embedded HTTP server can't handle concurrent requests.
 
 ## Protocol summary (V2)
 
