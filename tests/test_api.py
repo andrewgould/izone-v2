@@ -99,6 +99,57 @@ def test_favourite_target_reached_ignores_zones_beyond_favourite() -> None:
     assert api.favourite_target_reached(_fav((3, 2100)), [_zone(3, 2100), _zone(2, 0)])
 
 
+def test_plan_favourite_zones_applies_healthy() -> None:
+    plan = api.plan_favourite_zones(_fav((3, 2100), (2, 2300)), [_zone(2, 0), _zone(3, 0)])
+    assert plan == [
+        api.ZoneApply(index=0, mode=3, setpoint=2100, defer=False),
+        api.ZoneApply(index=1, mode=2, setpoint=None, defer=False),
+    ]
+
+
+def test_plan_favourite_zones_defers_faulted_climate_zone() -> None:
+    # An Auto target needs the sensor - a faulted sensor means defer it.
+    plan = api.plan_favourite_zones(_fav((3, 2100)), [_zone(2, 0, fault=1)])
+    assert plan == [api.ZoneApply(index=0, mode=3, setpoint=2100, defer=True)]
+
+
+def test_plan_favourite_zones_applies_faulted_zone_when_target_needs_no_sensor() -> None:
+    # Close/Open targets don't need the sensor, so still apply a faulted zone.
+    plan = api.plan_favourite_zones(_fav((2, 2300)), [_zone(3, 0, fault=1)])
+    assert plan == [api.ZoneApply(index=0, mode=2, setpoint=None, defer=False)]
+
+
+def test_plan_favourite_zones_skips_constant() -> None:
+    zones = [_zone(3, 0, ztype=api.ZoneType.CONSTANT), _zone(3, 0)]
+    plan = api.plan_favourite_zones(_fav((3, 2100), (3, 2100)), zones)
+    assert [p.index for p in plan] == [1]
+
+
+def test_favourite_mismatches_reports_reasons() -> None:
+    fav = _fav((3, 2100), (3, 2100), (2, 2300), (3, 2100))
+    zones = [
+        _zone(3, 2100),  # match
+        _zone(2, 2100),  # mode mismatch
+        _zone(1, 999),  # close target but open -> mode mismatch (setpoint n/a)
+        _zone(3, 2000, fault=1),  # faulted -> can't verify
+    ]
+    assert api.favourite_mismatches(fav, zones) == [
+        {"zone": 1, "reason": "mode", "want": 3, "got": 2},
+        {"zone": 2, "reason": "mode", "want": 2, "got": 1},
+        {"zone": 3, "reason": "sensor_fault"},
+    ]
+
+
+def test_favourite_mismatches_reports_setpoint() -> None:
+    assert api.favourite_mismatches(_fav((3, 2100)), [_zone(3, 2000)]) == [
+        {"zone": 0, "reason": "setpoint", "want": 2100, "got": 2000}
+    ]
+
+
+def test_favourite_mismatches_empty_when_applied() -> None:
+    assert api.favourite_mismatches(_fav((3, 2100)), [_zone(3, 2100)]) == []
+
+
 def test_enums_match_official_spec() -> None:
     assert int(api.SysMode.COOL) == 1
     assert int(api.SysMode.AUTO) == 5

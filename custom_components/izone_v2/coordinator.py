@@ -12,8 +12,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import IZoneApi, IZoneError
-from .const import COMMAND_FAILURE_WINDOW, DOMAIN, OVERLOAD_THRESHOLD, POLL_INTERVAL
+from .api import IZoneApi, IZoneError, ZoneMode
+from .const import (
+    COMMAND_FAILURE_WINDOW,
+    DOMAIN,
+    OVERLOAD_THRESHOLD,
+    POLL_INTERVAL,
+    SCENE_DEFER_EXPIRY,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,6 +55,11 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
         # bridge-overload signal. Bounded so a runaway can't grow unbounded.
         self._command_failures: deque[float] = deque(maxlen=64)
         api.on_command_result = self._note_command_result
+        # Zone targets from a scene that couldn't be applied because the
+        # zone's sensor was faulted, keyed by zone index:
+        # index -> (expiry_monotonic, mode, setpoint_wire_or_None). Re-applied
+        # on a later poll once the sensor recovers (see _reapply_deferred).
+        self._deferred_zones: dict[int, tuple[float, int, int | None]] = {}
 
     @callback
     def _note_command_result(self, ok: bool) -> None:
@@ -76,6 +87,58 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
         """True when commands are failing often enough to warrant action."""
         return self.recent_command_failures >= OVERLOAD_THRESHOLD
 
+    # -- deferred scene zones ---------------------------------------------
+
+    def defer_zone_target(self, index: int, mode: int, setpoint: int | None) -> None:
+        """Remember a scene's target for a zone whose sensor is faulted.
+
+        Re-applied automatically by a later poll once the sensor recovers, or
+        dropped after SCENE_DEFER_EXPIRY if it never does.
+        """
+        expiry = self.hass.loop.time() + SCENE_DEFER_EXPIRY
+        self._deferred_zones[index] = (expiry, mode, setpoint)
+
+    def clear_deferred_zones(self) -> None:
+        """Forget all pending deferrals (a newer scene supersedes them)."""
+        self._deferred_zones.clear()
+
+    async def _reapply_deferred(self, zones: list[dict[str, Any]]) -> None:
+        """Re-apply deferred zone targets whose sensors have recovered.
+
+        Runs inside the poll (so it's serialised with reads); a send that
+        fails is left pending for the next poll rather than failing the poll.
+        """
+        if not self._deferred_zones:
+            return
+        now = self.hass.loop.time()
+        by_index = {int(z.get("Index", -1)): z for z in zones}
+        for index in list(self._deferred_zones):
+            expiry, mode, setpoint = self._deferred_zones[index]
+            if now > expiry:
+                _LOGGER.info(
+                    "Dropping deferred scene target for zone %d - its sensor did "
+                    "not recover within the retry window",
+                    index,
+                )
+                del self._deferred_zones[index]
+                continue
+            zone = by_index.get(index)
+            if zone is None or zone.get("SensorFault"):
+                continue  # still faulted (or gone), keep waiting
+            try:
+                await self.api.async_set_zone_mode(index, ZoneMode(mode))
+                if setpoint is not None:
+                    await self.api.async_set_zone_setpoint(index, setpoint / 100)
+            except IZoneError as err:
+                _LOGGER.debug(
+                    "Deferred re-apply for zone %d failed, will retry: %s", index, err
+                )
+                continue
+            _LOGGER.info(
+                "Zone %d sensor recovered - applied its deferred scene target", index
+            )
+            del self._deferred_zones[index]
+
     async def _async_update_data(self) -> IZoneData:
         try:
             response = await self.api.async_get_system()
@@ -86,6 +149,7 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
                 await self.api.async_get_zone(index)
                 for index in range(int(system.get("NoOfZones", 0)))
             ]
+            await self._reapply_deferred(zones)
         except IZoneError as err:
             raise UpdateFailed(str(err)) from err
         return IZoneData(

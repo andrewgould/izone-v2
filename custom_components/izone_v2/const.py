@@ -27,3 +27,10 @@ OVERLOAD_THRESHOLD = 3
 # the controller to settle before reading back.
 SCENE_VERIFY_RETRIES = 2
 SCENE_VERIFY_DELAY = 2.0
+
+# When a scene touches a climate zone whose sensor is faulted, the controller
+# won't apply the favourite as a unit, so we apply it zone-by-zone and defer
+# the faulted climate zones - re-applying each one when its sensor recovers.
+# A deferred target is dropped after this long so a sensor that only recovers
+# much later doesn't snap a stale scene target into place unexpectedly.
+SCENE_DEFER_EXPIRY = 900  # seconds (15 min)
