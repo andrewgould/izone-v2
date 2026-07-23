@@ -11,10 +11,12 @@ Implements the API documented on the iZone Developer Portal
                  object, e.g. ``{"SysOn": 1}``. The bridge replies ``OK``.
 - Notifications: the bridge broadcasts content-free ``iZoneChanged_System`` /
                  ``iZoneChanged_Zones`` / ``iZoneChanged_Schedules`` strings on
-                 UDP port 7005. Observed to be a periodic (~60s) heartbeat that
-                 dumps all three categories every cycle regardless of whether
-                 anything changed, so they are treated only as a debounced
-                 "poll now" nudge - the HTTP poll is the source of truth.
+                 UDP port 7005. In a controlled test a real state change
+                 triggered an (all-category) broadcast ~2-3s later while a no-op
+                 command triggered none - i.e. change-driven, though routine
+                 sensor-reading updates make them arrive roughly every ~60s in
+                 passive capture. Treated as a debounced "poll now" nudge; the
+                 HTTP poll is the fallback source of truth.
 
 All temperatures on the wire are degrees Celsius multiplied by 100.
 """

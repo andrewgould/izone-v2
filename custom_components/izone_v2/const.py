@@ -9,10 +9,10 @@ CONF_UID = "uid"
 
 MANUFACTURER = "iZone (Airstream Components)"
 
-# Seconds between polls of the bridge. This is the source of truth. The
-# bridge's UDP 7005 broadcasts also nudge a refresh, but they're a periodic
-# ~60s heartbeat (not reliably change-driven), so polling is what keeps state
-# current.
+# Seconds between polls of the bridge - the fallback source of truth. The
+# bridge's UDP 7005 broadcasts also nudge a refresh (change-driven, ~2-3s after
+# a real change), but polling is what guarantees state stays current if one is
+# missed.
 POLL_INTERVAL = 30
 
 # Bridge-overload signal: a rolling window (seconds) over which failed
