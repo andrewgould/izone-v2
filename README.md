@@ -22,7 +22,8 @@ library) against the Developer Portal documentation found:
 - **Discovery** — UDP broadcast `IASD` to `255.255.255.255:12107` matches the
   current official documentation exactly.
 - **Change notifications** — listening on UDP 7005 for `iZoneChanged_*` matches
-  the official v1 spec.
+  the official v1 spec (in practice these are a periodic content-free heartbeat,
+  so they're used only as a refresh hint, not a reliable change signal).
 - **v1 commands** — every command `pizone` sends (`POST /SystemON`,
   `/SystemMODE`, `/SystemFAN`, `/UnitSetpoint`, `/ZoneCommand`,
   `/AirMinCommand`, `/AirMaxCommand`, `/SleepTimer`, `/FreeAir`) matches the
@@ -171,9 +172,13 @@ needs no sensor) takes effect immediately, and each faulted climate zone is
 back (given up after 15 minutes). So a single flaky wireless sensor no longer
 blocks the rest of the scene.
 
-State refreshes every 30 s and immediately on the bridge's `iZoneChanged_*`
-UDP broadcasts. All requests are serialised — the bridge's embedded HTTP
-server can't handle concurrent requests.
+State refreshes every 30 s. The bridge's `iZoneChanged_*` UDP 7005 broadcasts
+also nudge a refresh, but in captured traffic they're a content-free periodic
+(~60 s) heartbeat that fires all categories every cycle regardless of change —
+so they're treated as a best-effort "poll now" hint, not the source of truth,
+and the integration behaves correctly with or without them. All requests are
+serialised — the bridge's embedded HTTP server can't handle concurrent
+requests.
 
 ## Protocol summary (V2)
 

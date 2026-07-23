@@ -35,9 +35,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: IZoneConfigEntry) -> boo
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
 
-    # The bridge broadcasts iZoneChanged_System / iZoneChanged_Zones on
-    # UDP 7005 whenever state changes (and every 120s regardless). Listen
-    # for those to refresh promptly; polling remains as the fallback.
+    # The bridge broadcasts content-free iZoneChanged_System / _Zones /
+    # _Schedules strings on UDP 7005. In captured traffic these are a periodic
+    # (~60s) heartbeat that fires all three every cycle regardless of whether
+    # anything changed - not reliably tied to state changes - so we use them
+    # only as a best-effort "poll now" nudge on top of the HTTP poll, never as
+    # the source of truth. Harmless if absent; polling still covers everything.
     transport = await _async_start_notification_listener(hass, coordinator)
     if transport is not None:
         entry.async_on_unload(transport.close)
