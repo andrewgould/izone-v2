@@ -9,8 +9,12 @@ Implements the API documented on the iZone Developer Portal
                  ``{"iZoneV2Request": {"Type": t, "No": n, "No1": 0}}``
 - Control:       ``POST http://<bridge>/iZoneCommandV2`` with the command
                  object, e.g. ``{"SysOn": 1}``. The bridge replies ``OK``.
-- Notifications: the bridge broadcasts ``iZoneChanged_System`` /
-                 ``iZoneChanged_Zones`` on UDP port 7005 when state changes.
+- Notifications: the bridge broadcasts content-free ``iZoneChanged_System`` /
+                 ``iZoneChanged_Zones`` / ``iZoneChanged_Schedules`` strings on
+                 UDP port 7005. Observed to be a periodic (~60s) heartbeat that
+                 dumps all three categories every cycle regardless of whether
+                 anything changed, so they are treated only as a debounced
+                 "poll now" nudge - the HTTP poll is the source of truth.
 
 All temperatures on the wire are degrees Celsius multiplied by 100.
 """
