@@ -161,6 +161,89 @@ def favourite_target_reached(
     return True
 
 
+@dataclass(frozen=True)
+class ZoneApply:
+    """One zone's target when applying a favourite ("scene") zone-by-zone.
+
+    `setpoint` is a wire temperature (Celsius x100) and is only meaningful
+    for climate (Auto) targets; it is None otherwise. `defer` is True when
+    the target needs the zone's sensor (Auto mode) but that sensor is
+    currently faulted - such a zone can't be driven now and must be applied
+    later, once the sensor recovers.
+    """
+
+    index: int
+    mode: int
+    setpoint: int | None
+    defer: bool
+
+
+def plan_favourite_zones(
+    favourite: dict[str, Any], zones: list[dict[str, Any]]
+) -> list[ZoneApply]:
+    """Per-zone actions that reproduce a favourite without ``FavouriteSet``.
+
+    Used as a fallback when the controller won't apply a favourite as a unit
+    because one of its climate zones has a faulted sensor. Constant/bypass
+    zones are controller-managed and skipped. Open/Close targets never need a
+    sensor, so a faulted zone is still applied for those; only an Auto target
+    on a faulted zone is deferred.
+    """
+    fav_zones = favourite.get("Zones") or []
+    plan: list[ZoneApply] = []
+    for index, zone in enumerate(zones):
+        if index >= len(fav_zones):
+            break
+        if int(zone.get("ZoneType", 0)) == ZoneType.CONSTANT:
+            continue
+        mode = int(fav_zones[index].get("Mode", 0))
+        if mode not in (ZoneMode.OPEN, ZoneMode.CLOSE, ZoneMode.AUTO):
+            continue  # unset / unknown target, leave the zone alone
+        is_auto = mode == ZoneMode.AUTO
+        setpoint = int(fav_zones[index].get("Setpoint", 0)) if is_auto else None
+        defer = is_auto and bool(zone.get("SensorFault"))
+        plan.append(ZoneApply(index=index, mode=mode, setpoint=setpoint, defer=defer))
+    return plan
+
+
+def favourite_mismatches(
+    favourite: dict[str, Any], zones: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Human-readable list of why a favourite isn't (fully) applied.
+
+    A diagnostic companion to :func:`favourite_target_reached`: instead of a
+    bare True/False it names each zone that doesn't match and why, so an
+    unconfirmed scene can be logged as e.g. "zone 2 sensor_fault, zone 7 mode
+    want 3 got 2" rather than a generic warning. Constant zones are skipped.
+    """
+    fav_zones = favourite.get("Zones") or []
+    out: list[dict[str, Any]] = []
+    for index, zone in enumerate(zones):
+        if index >= len(fav_zones):
+            break
+        if int(zone.get("ZoneType", 0)) == ZoneType.CONSTANT:
+            continue
+        if zone.get("SensorFault"):
+            out.append({"zone": index, "reason": "sensor_fault"})
+            continue
+        target = fav_zones[index]
+        want_mode = int(target.get("Mode", -2))
+        got_mode = int(zone.get("Mode", -1))
+        if got_mode != want_mode:
+            out.append(
+                {"zone": index, "reason": "mode", "want": want_mode, "got": got_mode}
+            )
+            continue
+        if want_mode == ZoneMode.AUTO:
+            want_sp = int(target.get("Setpoint", -2))
+            got_sp = int(zone.get("Setpoint", -1))
+            if got_sp != want_sp:
+                out.append(
+                    {"zone": index, "reason": "setpoint", "want": want_sp, "got": got_sp}
+                )
+    return out
+
+
 def clean_string(value: Any) -> str:
     """Strip firmware padding (NUL / 0xFF bytes) from a wire string."""
     if value is None:

@@ -158,8 +158,18 @@ When a favourite scene is activated, the integration **reads the zones back and
 confirms** they match the favourite's stored config, re-applying a couple of
 times if they don't (zones with a faulty sensor, and controller-managed
 constant zones, are skipped). If it still can't confirm after retrying, it logs
-a warning — so a scene that quietly failed to take is visible rather than
-silent.
+a warning naming the specific zones that don't match — so a scene that quietly
+failed to take is visible rather than silent.
+
+**Resilient to dropped zones.** If a favourite drives a climate (Auto) zone
+whose sensor is faulted, the controller refuses to apply the favourite as a
+whole — historically that meant the *entire* scene silently failed, healthy
+zones included. When this is detected, the integration instead applies the
+scene **zone by zone**: every healthy zone (and any open/close target, which
+needs no sensor) takes effect immediately, and each faulted climate zone is
+**deferred** and re-applied automatically on a later poll once its sensor comes
+back (given up after 15 minutes). So a single flaky wireless sensor no longer
+blocks the rest of the scene.
 
 State refreshes every 30 s and immediately on the bridge's `iZoneChanged_*`
 UDP broadcasts. All requests are serialised — the bridge's embedded HTTP
