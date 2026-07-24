@@ -107,6 +107,15 @@ fault binary sensors are enabled by default for the same reason — none of this
 costs extra requests to the bridge, since it all rides along in the zone data
 already being polled every 30 s.
 
+**Heat/cool are whole-unit modes.** `heat` / `cool` / `dry` are set on the **AC
+unit** climate entity; each **zone** entity exposes only `off` (closed),
+`fan_only` (open), and `heat_cool` (climate control) — a zone follows the unit,
+it has no heat/cool of its own. `climate.set_temperature` may bundle an
+`hvac_mode` (it's applied before the setpoint), and asking a zone for a
+unit-level mode returns a clear error rather than silently doing nothing — so a
+blanket "set the unit *and* its zones to heat 22°" should set `heat` on the unit
+and `heat_cool` on the zones.
+
 Each zone is its own Home Assistant **device**, named after the zone and with the
 zone name as its *suggested area* — so entities land in the right room by default
 and can be re-assigned per zone. Diagnostics download is supported for issue
