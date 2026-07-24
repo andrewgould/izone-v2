@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from homeassistant.components.climate import (
+    ATTR_HVAC_MODE,
     FAN_AUTO,
     FAN_HIGH,
     FAN_LOW,
@@ -112,6 +113,27 @@ class IZoneClimateMixin(ClimateEntity):
         temp = round(float(temp) * 2) / 2  # the system works in 0.5C steps
         return min(max(temp, self.min_temp), self.max_temp)
 
+    async def _apply_hvac_mode(self, kwargs: dict[str, Any]) -> None:
+        """Honour an hvac_mode bundled into a set_temperature call.
+
+        Home Assistant allows ``climate.set_temperature`` to carry an
+        ``hvac_mode``; standard climate entities set the mode before the
+        setpoint. We do the same, but reject a mode the entity doesn't support
+        with a clear error instead of a cryptic failure - a zone has no
+        'heat'/'cool' of its own (that's a whole-unit mode), so pointing a
+        blanket "heat everything to 22" at both the unit and its zones used to
+        fail obscurely.
+        """
+        hvac_mode = kwargs.get(ATTR_HVAC_MODE)
+        if hvac_mode is None:
+            return
+        if hvac_mode not in self.hvac_modes:
+            raise ServiceValidationError(
+                f"{self.entity_id} does not support the '{hvac_mode}' mode; "
+                f"supported modes: {', '.join(self.hvac_modes)}"
+            )
+        await self.async_set_hvac_mode(hvac_mode)
+
 
 class IZoneAcClimate(IZoneEntity, IZoneClimateMixin):
     """The AC unit itself."""
@@ -174,6 +196,7 @@ class IZoneAcClimate(IZoneEntity, IZoneClimateMixin):
         await self._command({"SysFan": int(HA_TO_FAN[fan_mode])})
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
+        await self._apply_hvac_mode(kwargs)
         temp = self._validated_setpoint(kwargs)
         await self._command({"SysSetpoint": round(temp * 100)})
 
@@ -213,7 +236,15 @@ class IZoneZoneClimate(IZoneZoneEntity, IZoneClimateMixin):
             HVACMode.OFF: ZoneMode.CLOSE,
             HVACMode.FAN_ONLY: ZoneMode.OPEN,
             HVACMode.HEAT_COOL: ZoneMode.AUTO,
-        }[hvac_mode]
+        }.get(hvac_mode)
+        if mode is None:
+            # heat/cool/dry are whole-unit modes; a zone only opens, closes, or
+            # climate-controls (following the unit). Say so instead of KeyError.
+            raise ServiceValidationError(
+                f"{self.entity_id} is a zone and has no '{hvac_mode}' mode - set "
+                "the AC unit's mode instead; a zone can only be off, fan-only, "
+                "or climate-controlled (heat_cool)"
+            )
         await self._command({"ZoneMode": {"Index": self._index, "Mode": int(mode)}})
 
     async def async_turn_on(self) -> None:
@@ -223,6 +254,7 @@ class IZoneZoneClimate(IZoneZoneEntity, IZoneClimateMixin):
         await self.async_set_hvac_mode(HVACMode.OFF)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
+        await self._apply_hvac_mode(kwargs)
         temp = self._validated_setpoint(kwargs)
         await self._command(
             {"ZoneSetpoint": {"Index": self._index, "Setpoint": round(temp * 100)}}
