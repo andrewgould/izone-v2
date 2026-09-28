@@ -53,11 +53,14 @@ class IZoneZoneSwitch(IZoneZoneEntity, SwitchEntity):
         return attrs
 
     async def async_turn_on(self, **kwargs: Any) -> None:
+        # An explicit command supersedes whatever a scene was still applying.
+        self.coordinator.cancel_zone_target(self._index)
         await self._command(
             {"ZoneMode": {"Index": self._index, "Mode": int(ZoneMode.OPEN)}}
         )
 
     async def async_turn_off(self, **kwargs: Any) -> None:
+        self.coordinator.cancel_zone_target(self._index)
         await self._command(
             {"ZoneMode": {"Index": self._index, "Mode": int(ZoneMode.CLOSE)}}
         )

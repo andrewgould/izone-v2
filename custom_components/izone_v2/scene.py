@@ -21,6 +21,7 @@ from .api import (
     IZoneError,
     SysFan,
     SysMode,
+    ZoneApply,
     ZoneMode,
     clean_string,
     favourite_mismatches,
@@ -90,12 +91,12 @@ class IZoneFavouriteScene(IZoneEntity, Scene):
         except IZoneError:
             target = None
 
-        # A newer scene supersedes any pending deferrals from an earlier one.
-        self.coordinator.clear_deferred_zones()
+        # A newer scene supersedes whatever an earlier one was still applying.
+        self.coordinator.replace_zone_targets({})
 
         # If the favourite drives a climate zone whose sensor is faulted, the
         # controller won't apply the favourite as a unit - apply it ourselves,
-        # zone by zone, and defer the faulted climate zones for later.
+        # zone by zone, and leave the faulted climate zones for later.
         plan = (
             plan_favourite_zones(target, self.coordinator.data.zones)
             if target is not None
@@ -104,9 +105,11 @@ class IZoneFavouriteScene(IZoneEntity, Scene):
         if any(action.defer for action in plan):
             await self._activate_manually(target, plan)
         else:
-            await self._activate_via_controller(target)
+            await self._activate_via_controller(target, plan)
 
-    async def _activate_via_controller(self, target: dict[str, Any] | None) -> None:
+    async def _activate_via_controller(
+        self, target: dict[str, Any] | None, plan: list[ZoneApply]
+    ) -> None:
         """Apply via the single ``FavouriteSet`` command (the fast path)."""
         for attempt in range(SCENE_VERIFY_RETRIES + 1):
             try:
@@ -122,7 +125,7 @@ class IZoneFavouriteScene(IZoneEntity, Scene):
             await asyncio.sleep(SCENE_VERIFY_DELAY)
             await self.coordinator.async_refresh()
             if favourite_target_reached(target, self.coordinator.data.zones):
-                return
+                break
 
             _LOGGER.debug(
                 "iZone favourite '%s' not fully applied yet (attempt %d/%d)",
@@ -133,43 +136,62 @@ class IZoneFavouriteScene(IZoneEntity, Scene):
         else:
             self._log_unverified(target)
 
+        # Keep working on any zone that hasn't landed (or that a sensor
+        # dropout means the controller may yet revert) on later polls.
+        every_zone = {action.index for action in plan}
+        self._track_targets(plan, mode_sent=every_zone, setpoint_sent=every_zone)
         await self.coordinator.async_request_refresh()
 
     async def _activate_manually(
-        self, target: dict[str, Any], plan: list[Any]
+        self, target: dict[str, Any], plan: list[ZoneApply]
     ) -> None:
-        """Apply a favourite zone-by-zone, deferring faulted climate zones.
+        """Apply a favourite zone-by-zone, leaving faulted climate zones for later.
 
         Reproduces the favourite's per-zone config (and system mode/fan, if it
         specifies them) with individual commands, so a single faulted zone
-        can't block the whole scene the way ``FavouriteSet`` does. Faulted
-        climate zones are handed to the coordinator to re-apply once their
-        sensor recovers.
+        can't block the whole scene the way ``FavouriteSet`` does.
+
+        A setpoint is only sent to a zone that's already under climate
+        control: the controller discards a setpoint sent to a closed or open
+        zone (it just switches the zone to Auto at its *old* setpoint), which
+        is how a bedroom once spent the night heating to 22 instead of the
+        favourite's 16.5. Those setpoints - and every faulted climate zone -
+        are handed to the coordinator, which sends them once the zone is ready.
         """
         api = self.coordinator.api
-        deferred: list[int] = []
+        zones = self.coordinator.data.zones
+        mode_sent: set[int] = set()
+        setpoint_sent: set[int] = set()
         try:
             await self._apply_system_settings(target)
             for action in plan:
                 if action.defer:
-                    self.coordinator.defer_zone_target(
-                        action.index, action.mode, action.setpoint
-                    )
-                    deferred.append(action.index)
                     continue
+                currently_auto = int(zones[action.index].get("Mode", 0)) == ZoneMode.AUTO
                 await api.async_set_zone_mode(action.index, ZoneMode(action.mode))
-                if action.setpoint is not None:
+                mode_sent.add(action.index)
+                if action.setpoint is not None and currently_auto:
                     await api.async_set_zone_setpoint(
                         action.index, action.setpoint / 100
                     )
+                    setpoint_sent.add(action.index)
         except IZoneError as err:
             raise HomeAssistantError(str(err)) from err
+        finally:
+            # Track what we meant to do even if a send failed part-way through.
+            self._track_targets(plan, mode_sent=mode_sent, setpoint_sent=setpoint_sent)
 
         _LOGGER.info(
-            "iZone favourite '%s' applied per-zone; zone(s) %s deferred until "
-            "their sensor recovers",
+            "iZone favourite '%s' applied per-zone; zone(s) %s waiting for their "
+            "sensor, zone(s) %s get their setpoint once climate control is on",
             self._attr_name,
-            deferred or "none",
+            [a.index for a in plan if a.defer] or "none",
+            [
+                a.index
+                for a in plan
+                if a.setpoint is not None and not a.defer and a.index not in setpoint_sent
+            ]
+            or "none",
         )
 
         await asyncio.sleep(SCENE_VERIFY_DELAY)
@@ -177,6 +199,23 @@ class IZoneFavouriteScene(IZoneEntity, Scene):
         if not favourite_target_reached(target, self.coordinator.data.zones):
             self._log_unverified(target)
         await self.coordinator.async_request_refresh()
+
+    def _track_targets(
+        self, plan: list[ZoneApply], *, mode_sent: set[int], setpoint_sent: set[int]
+    ) -> None:
+        """Hand each zone's target to the coordinator to see through."""
+        self.coordinator.replace_zone_targets(
+            {
+                action.index: self.coordinator.new_zone_target(
+                    action.mode,
+                    action.setpoint,
+                    source=self._attr_name,
+                    mode_sent=action.index in mode_sent,
+                    setpoint_sent=action.index in setpoint_sent,
+                )
+                for action in plan
+            }
+        )
 
     async def _apply_system_settings(self, favourite: dict[str, Any]) -> None:
         """Apply a favourite's system mode/fan, when it specifies them.
@@ -202,15 +241,15 @@ class IZoneFavouriteScene(IZoneEntity, Scene):
             await api.async_set_system_fan(fan)
 
     def _log_unverified(self, target: dict[str, Any] | None) -> None:
-        """Warn with the specific zones that don't match the favourite."""
+        """Log the specific zones that don't match the favourite (yet)."""
         detail = ""
         if target is not None:
             mismatches = favourite_mismatches(target, self.coordinator.data.zones)
             if mismatches:
                 detail = f" - unmatched zones: {mismatches}"
-        _LOGGER.warning(
-            "iZone favourite '%s' could not be confirmed applied%s "
-            "(the controller may be busy or a zone sensor faulty)",
+        _LOGGER.info(
+            "iZone favourite '%s' not fully applied yet%s - will keep re-applying "
+            "the unmatched zones as the controller and their sensors allow",
             self._attr_name,
             detail,
         )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
@@ -32,4 +33,8 @@ async def async_get_config_entry_diagnostics(
         "last_update_success": coordinator.last_update_success,
         "recent_command_failures": coordinator.recent_command_failures,
         "bridge_overloaded": coordinator.bridge_overloaded,
+        "pending_zone_targets": {
+            index: asdict(target)
+            for index, target in coordinator.zone_targets.items()
+        },
     }
