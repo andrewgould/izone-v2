@@ -18,7 +18,7 @@ from homeassistant.components.climate import (
 )
 from homeassistant.const import ATTR_TEMPERATURE, PRECISION_HALVES, UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api import SysFan, SysMode, ZoneMode, ZoneType, temp_from_wire
@@ -245,6 +245,8 @@ class IZoneZoneClimate(IZoneZoneEntity, IZoneClimateMixin):
                 "the AC unit's mode instead; a zone can only be off, fan-only, "
                 "or climate-controlled (heat_cool)"
             )
+        # An explicit command supersedes whatever a scene was still applying.
+        self.coordinator.cancel_zone_target(self._index)
         await self._command({"ZoneMode": {"Index": self._index, "Mode": int(mode)}})
 
     async def async_turn_on(self) -> None:
@@ -254,8 +256,41 @@ class IZoneZoneClimate(IZoneZoneEntity, IZoneClimateMixin):
         await self.async_set_hvac_mode(HVACMode.OFF)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        await self._apply_hvac_mode(kwargs)
-        temp = self._validated_setpoint(kwargs)
-        await self._command(
-            {"ZoneSetpoint": {"Index": self._index, "Setpoint": round(temp * 100)}}
+        setpoint = round(self._validated_setpoint(kwargs) * 100)
+        hvac_mode = kwargs.get(ATTR_HVAC_MODE)
+        if hvac_mode is not None and hvac_mode != HVACMode.HEAT_COOL:
+            await self._apply_hvac_mode(kwargs)  # rejects heat/cool/dry clearly
+            _LOGGER.warning(
+                "%s: set to %s but not to %.1f°C - a zone only holds a target "
+                "temperature under climate control (heat_cool), and the controller "
+                "switches a zone back on if it's sent one",
+                self.entity_id,
+                hvac_mode,
+                setpoint / 100,
+            )
+            return
+
+        self.coordinator.cancel_zone_target(self._index)
+        if int(self.zone.get("Mode", 0)) in (ZoneMode.AUTO, ZoneMode.OVERRIDE):
+            await self._command(
+                {"ZoneSetpoint": {"Index": self._index, "Setpoint": setpoint}}
+            )
+            return
+
+        # The controller discards a setpoint sent to a zone that isn't under
+        # climate control - it switches the zone to Auto at its *old* setpoint.
+        # So switch it first, and let the coordinator send the setpoint once
+        # the zone reads back as Auto.
+        self.coordinator.set_zone_target(
+            self._index,
+            self.coordinator.new_zone_target(
+                ZoneMode.AUTO, setpoint, source=self.entity_id, mode_sent=True
+            ),
         )
+        try:
+            await self._command(
+                {"ZoneMode": {"Index": self._index, "Mode": int(ZoneMode.AUTO)}}
+            )
+        except HomeAssistantError:
+            self.coordinator.cancel_zone_target(self._index)
+            raise

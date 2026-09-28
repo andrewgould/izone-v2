@@ -96,6 +96,7 @@ IP address manually.
 | Filter warning, damper fault, sensor fault | `binary_sensor` (diagnostic) |
 | Bridge overloaded | `binary_sensor` (diagnostic) — on when commands are repeatedly failing |
 | Command failures (recent) | `sensor` (diagnostic) — count of failed commands in the last 5 min |
+| Pending zone changes | `sensor` (diagnostic) — zones still being brought to a scene's target; attributes say which and why |
 | Sleep timer | `number` (0–120 min in 30-min steps) |
 | Zone min/max airflow | `number` per zone (config; disabled by default) |
 | Favourites | `scene` per configured favourite (up to 9) |
@@ -115,6 +116,14 @@ it has no heat/cool of its own. `climate.set_temperature` may bundle an
 unit-level mode returns a clear error rather than silently doing nothing — so a
 blanket "set the unit *and* its zones to heat 22°" should set `heat` on the unit
 and `heat_cool` on the zones.
+
+**A zone only holds a setpoint under climate control.** The controller throws
+away a setpoint sent to a closed or open zone: instead it switches the zone to
+climate control at its *old* setpoint. So setting a temperature on a zone that's
+`off` turns it on (`heat_cool`) first, and the setpoint is sent once the zone
+reads back as climate-controlled, usually a few seconds later. With
+`hvac_mode: off` or `fan_only` bundled in, the mode is applied and the
+temperature is skipped, with a warning in the log.
 
 Each zone is its own Home Assistant **device**, named after the zone and with the
 zone name as its *suggested area* — so entities land in the right room by default
@@ -168,19 +177,35 @@ adding or renaming a favourite in the iZone app to pick up the change.
 
 When a favourite scene is activated, the integration **reads the zones back and
 confirms** they match the favourite's stored config, re-applying a couple of
-times if they don't (zones with a faulty sensor, and controller-managed
-constant zones, are skipped). If it still can't confirm after retrying, it logs
-a warning naming the specific zones that don't match — so a scene that quietly
-failed to take is visible rather than silent.
+times if they don't (controller-managed constant zones are skipped).
+
+**Scenes are followed through.** The controller often answers `{OK}` and then
+leaves some zones where they were, and a zone whose wireless sensor has dropped
+out can't take a climate target at all. So after a scene, each zone's target is
+kept and checked on every poll until the zone matches it:
+
+- whatever is still missing is re-sent, at most once a minute and at most 10
+  times. A setpoint is only ever sent to a zone that's already under climate
+  control, for the reason above.
+- a zone with a faulted sensor is left alone until the sensor comes back. The
+  controller reports a faulted zone as closed and, on recovery, resumes the
+  mode and setpoint it last remembered. The integration then corrects the zone
+  to the scene's target, even hours later.
+- a target is dropped when a newer scene replaces it, when the zone is changed
+  from Home Assistant, the iZone app or the wall controller (the newer change
+  wins), or after 12 hours.
+
+The **Pending zone changes** sensor shows what's outstanding, and the log
+records each zone that lands late or is given up on. Targets live in memory, so
+a Home Assistant restart forgets them.
 
 **Resilient to dropped zones.** If a favourite drives a climate (Auto) zone
 whose sensor is faulted, the controller refuses to apply the favourite as a
 whole — historically that meant the *entire* scene silently failed, healthy
 zones included. When this is detected, the integration instead applies the
 scene **zone by zone**: every healthy zone (and any open/close target, which
-needs no sensor) takes effect immediately, and each faulted climate zone is
-**deferred** and re-applied automatically on a later poll once its sensor comes
-back (given up after 15 minutes). So a single flaky wireless sensor no longer
+needs no sensor) takes effect immediately, and each faulted climate zone waits
+for its sensor as described above. So a single flaky wireless sensor no longer
 blocks the rest of the scene.
 
 State refreshes every 30 s. The bridge's `iZoneChanged_*` UDP 7005 broadcasts

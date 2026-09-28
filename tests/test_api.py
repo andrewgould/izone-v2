@@ -150,6 +150,102 @@ def test_favourite_mismatches_empty_when_applied() -> None:
     assert api.favourite_mismatches(_fav((3, 2100)), [_zone(3, 2100)]) == []
 
 
+def _target(mode: int, setpoint: int | None, **kw) -> api.ZoneTarget:
+    return api.ZoneTarget(mode=mode, setpoint=setpoint, expires=10_000, **kw)
+
+
+def _step(target: api.ZoneTarget, zone: dict, now: float = 100) -> api.TargetStep:
+    return api.next_target_step(target, zone, now, resend_after=60, max_sends=3)
+
+
+AUTO, CLOSE, OPEN = api.ZoneMode.AUTO, api.ZoneMode.CLOSE, api.ZoneMode.OPEN
+S = api.TargetStep
+
+
+def test_target_setpoint_waits_for_climate_mode() -> None:
+    # 28 Sep 2026: Overnight opened the closed rear bedroom (stored 22C) to
+    # Auto 16.5C. The setpoint sent straight after the mode was discarded, and
+    # the room heated to 22 all night. The setpoint must follow the mode.
+    target = _target(AUTO, 1650, mode_sent=100)
+    assert _step(target, _zone(CLOSE, 2200), now=102) is S.WAIT  # still switching
+    assert _step(target, _zone(AUTO, 2200), now=130) is S.SEND_SETPOINT
+    target.setpoint_sent = 130
+    assert _step(target, _zone(AUTO, 2200), now=140) is S.WAIT
+    assert _step(target, _zone(AUTO, 1650), now=160) is S.REACHED
+
+
+def test_target_never_sends_a_setpoint_to_a_closed_zone() -> None:
+    # A setpoint sent to a closed zone opens it at its OLD setpoint.
+    target = _target(AUTO, 1650)
+    assert _step(target, _zone(CLOSE, 2200)) is S.SEND_MODE
+
+
+def test_target_waits_out_a_sensor_fault_then_finishes() -> None:
+    # The controller reports a faulted zone as closed; on recovery it resumes
+    # its own remembered setpoint, which we then correct.
+    target = _target(AUTO, 1700)
+    assert _step(target, _zone(CLOSE, 1900, fault=1), now=100) is S.WAIT
+    assert _step(target, _zone(CLOSE, 1900, fault=1), now=5000) is S.WAIT
+    assert target.waited_for_sensor
+    assert _step(target, _zone(AUTO, 1900), now=5030) is S.SEND_SETPOINT
+
+
+def test_target_not_confirmed_while_sensor_faulted() -> None:
+    # A faulted zone reads closed even when the controller will reopen it on
+    # recovery - so a close target isn't confirmed until the sensor is back.
+    target = _target(CLOSE, None)
+    assert _step(target, _zone(CLOSE, 2300, fault=1)) is S.WAIT
+    assert _step(target, _zone(CLOSE, 2300)) is S.REACHED
+
+
+def test_target_close_ignores_setpoint() -> None:
+    assert _step(_target(CLOSE, None), _zone(CLOSE, 2200)) is S.REACHED
+
+
+def test_target_abandoned_when_zone_changed_elsewhere() -> None:
+    # Someone closes the zone from the app / wall controller: their call wins.
+    target = _target(AUTO, 1650, mode_sent=100, setpoint_sent=100)
+    assert _step(target, _zone(AUTO, 2200), now=110) is S.WAIT
+    assert _step(target, _zone(CLOSE, 2200), now=140) is S.OVERRIDDEN
+
+    # ...or sets a different temperature.
+    target = _target(AUTO, 1650, mode_sent=100, setpoint_sent=100)
+    assert _step(target, _zone(AUTO, 2200), now=110) is S.WAIT
+    assert _step(target, _zone(AUTO, 2000), now=140) is S.OVERRIDDEN
+
+
+def test_target_progress_is_not_an_override() -> None:
+    # The mode moving onto the target is progress, not someone else's change.
+    target = _target(AUTO, 1650, mode_sent=100)
+    assert _step(target, _zone(CLOSE, 2200), now=110) is S.WAIT
+    assert _step(target, _zone(AUTO, 2200), now=140) is S.SEND_SETPOINT
+
+
+def test_target_no_override_check_across_a_sensor_fault() -> None:
+    # Fault forces the zone closed and recovery reopens it - neither is a
+    # human change.
+    target = _target(AUTO, 1650, mode_sent=100, setpoint_sent=100)
+    assert _step(target, _zone(AUTO, 2200), now=110) is S.WAIT
+    assert _step(target, _zone(CLOSE, 2200, fault=1), now=140) is S.WAIT
+    assert _step(target, _zone(OPEN, 2200), now=170) is S.SEND_MODE
+
+
+def test_target_resend_is_spaced() -> None:
+    target = _target(OPEN, None, mode_sent=100)
+    assert _step(target, _zone(CLOSE, 0), now=130) is S.WAIT
+    assert _step(target, _zone(CLOSE, 0), now=160) is S.SEND_MODE
+
+
+def test_target_gives_up_after_max_sends() -> None:
+    target = _target(OPEN, None, sends=3)
+    assert _step(target, _zone(CLOSE, 0)) is S.EXHAUSTED
+
+
+def test_target_expires() -> None:
+    target = _target(AUTO, 1650)
+    assert _step(target, _zone(CLOSE, 2200, fault=1), now=10_000) is S.EXPIRED
+
+
 def test_enums_match_official_spec() -> None:
     assert int(api.SysMode.COOL) == 1
     assert int(api.SysMode.AUTO) == 5

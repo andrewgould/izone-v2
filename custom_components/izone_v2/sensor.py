@@ -16,9 +16,15 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import ROOM_SENSOR_NONE, ROOM_SENSOR_WIRELESS, clean_string, temp_from_wire
+from .api import (
+    ROOM_SENSOR_NONE,
+    ROOM_SENSOR_WIRELESS,
+    ZoneMode,
+    clean_string,
+    temp_from_wire,
+)
 from .coordinator import IZoneConfigEntry, IZoneCoordinator
-from .entity import IZoneEntity, IZoneZoneEntity
+from .entity import IZoneEntity, IZoneZoneEntity, zone_display_name
 
 # BatteryLevel_e
 BATTERY_LEVELS = {0: "full", 1: "half", 2: "empty"}
@@ -40,6 +46,7 @@ async def async_setup_entry(
         IZoneAcErrorSensor(coordinator),
         IZoneSleepRemainingSensor(coordinator),
         IZoneCommandFailuresSensor(coordinator),
+        IZonePendingZoneTargetsSensor(coordinator),
     ]
     for zone in coordinator.data.zones:
         index = zone["Index"]
@@ -142,6 +149,51 @@ class IZoneCommandFailuresSensor(IZoneEntity, SensorEntity):
     @property
     def native_value(self) -> int:
         return self.coordinator.recent_command_failures
+
+
+class IZonePendingZoneTargetsSensor(IZoneEntity, SensorEntity):
+    """How many zones are still being brought to a scene's target.
+
+    Non-zero for a few seconds after most scenes; one that stays up means a
+    zone is waiting for its sensor to come back, or the controller keeps
+    ignoring a command. The attributes say which zone, what it's waiting
+    for, and which scene asked for it.
+    """
+
+    _attr_name = "Pending zone changes"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:timer-sand"
+
+    def __init__(self, coordinator: IZoneCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.data.uid}_pending_zone_targets"
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.zone_targets)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        zones = self.coordinator.data.zones
+        attrs: dict[str, str] = {}
+        for index, target in sorted(self.coordinator.zone_targets.items()):
+            zone = zones[index] if index < len(zones) else {"Index": index}
+            want = _ZONE_MODE_NAMES.get(target.mode, str(target.mode))
+            if target.mode == ZoneMode.AUTO and target.setpoint is not None:
+                want += f" {target.setpoint / 100:g}°C"
+            status = "waiting for sensor" if zone.get("SensorFault") else "settling"
+            if target.sends:
+                status += f", {target.sends} follow-up command(s)"
+            attrs[zone_display_name(zone)] = f"{want} ({target.source}; {status})"
+        return attrs
+
+
+_ZONE_MODE_NAMES = {
+    ZoneMode.OPEN: "open",
+    ZoneMode.CLOSE: "closed",
+    ZoneMode.AUTO: "climate",
+}
 
 
 class IZoneZoneTempSensor(IZoneZoneEntity, SensorEntity):

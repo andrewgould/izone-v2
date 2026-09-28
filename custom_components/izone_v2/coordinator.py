@@ -12,13 +12,23 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import IZoneApi, IZoneError, ZoneMode
+from .api import (
+    IZoneApi,
+    IZoneError,
+    TargetStep,
+    ZoneMode,
+    ZoneTarget,
+    clean_string,
+    next_target_step,
+)
 from .const import (
     COMMAND_FAILURE_WINDOW,
     DOMAIN,
     OVERLOAD_THRESHOLD,
     POLL_INTERVAL,
-    SCENE_DEFER_EXPIRY,
+    ZONE_TARGET_EXPIRY,
+    ZONE_TARGET_MAX_SENDS,
+    ZONE_TARGET_RESEND,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -55,11 +65,10 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
         # bridge-overload signal. Bounded so a runaway can't grow unbounded.
         self._command_failures: deque[float] = deque(maxlen=64)
         api.on_command_result = self._note_command_result
-        # Zone targets from a scene that couldn't be applied because the
-        # zone's sensor was faulted, keyed by zone index:
-        # index -> (expiry_monotonic, mode, setpoint_wire_or_None). Re-applied
-        # on a later poll once the sensor recovers (see _reapply_deferred).
-        self._deferred_zones: dict[int, tuple[float, int, int | None]] = {}
+        # Zone states we've asked for but haven't seen yet, keyed by zone
+        # index. Checked and nudged along on every poll until confirmed (see
+        # _reconcile_zone_targets).
+        self._zone_targets: dict[int, ZoneTarget] = {}
 
     @callback
     def _note_command_result(self, ok: bool) -> None:
@@ -87,57 +96,150 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
         """True when commands are failing often enough to warrant action."""
         return self.recent_command_failures >= OVERLOAD_THRESHOLD
 
-    # -- deferred scene zones ---------------------------------------------
+    # -- pending zone targets ----------------------------------------------
 
-    def defer_zone_target(self, index: int, mode: int, setpoint: int | None) -> None:
-        """Remember a scene's target for a zone whose sensor is faulted.
+    def new_zone_target(
+        self,
+        mode: int,
+        setpoint: int | None,
+        *,
+        source: str,
+        mode_sent: bool = False,
+        setpoint_sent: bool = False,
+    ) -> ZoneTarget:
+        """A target starting now; `*_sent` = that part was just commanded."""
+        now = self.hass.loop.time()
+        return ZoneTarget(
+            mode=mode,
+            setpoint=setpoint,
+            expires=now + ZONE_TARGET_EXPIRY,
+            source=source,
+            mode_sent=now if mode_sent else None,
+            setpoint_sent=now if setpoint_sent else None,
+        )
 
-        Re-applied automatically by a later poll once the sensor recovers, or
-        dropped after SCENE_DEFER_EXPIRY if it never does.
+    def replace_zone_targets(self, targets: dict[int, ZoneTarget]) -> None:
+        """Swap in a new set of targets - a newer scene supersedes an older one."""
+        self._zone_targets = dict(targets)
+        self.async_update_listeners()
+
+    def set_zone_target(self, index: int, target: ZoneTarget) -> None:
+        """Track a target for a single zone."""
+        self._zone_targets[index] = target
+        self.async_update_listeners()
+
+    def cancel_zone_target(self, index: int) -> None:
+        """Stop working towards a zone's target (a newer command supersedes it)."""
+        if self._zone_targets.pop(index, None) is not None:
+            self.async_update_listeners()
+
+    @property
+    def zone_targets(self) -> dict[int, ZoneTarget]:
+        """Pending zone targets, keyed by zone index (read-only view)."""
+        return dict(self._zone_targets)
+
+    async def _reconcile_zone_targets(self, zones: list[dict[str, Any]]) -> None:
+        """Nudge each pending zone target along, and retire finished ones.
+
+        Runs inside the poll (so it's serialised with reads). A failed send is
+        just logged - the target stays pending and is retried after the resend
+        interval, rather than failing the poll.
         """
-        expiry = self.hass.loop.time() + SCENE_DEFER_EXPIRY
-        self._deferred_zones[index] = (expiry, mode, setpoint)
-
-    def clear_deferred_zones(self) -> None:
-        """Forget all pending deferrals (a newer scene supersedes them)."""
-        self._deferred_zones.clear()
-
-    async def _reapply_deferred(self, zones: list[dict[str, Any]]) -> None:
-        """Re-apply deferred zone targets whose sensors have recovered.
-
-        Runs inside the poll (so it's serialised with reads); a send that
-        fails is left pending for the next poll rather than failing the poll.
-        """
-        if not self._deferred_zones:
+        if not self._zone_targets:
             return
         now = self.hass.loop.time()
         by_index = {int(z.get("Index", -1)): z for z in zones}
-        for index in list(self._deferred_zones):
-            expiry, mode, setpoint = self._deferred_zones[index]
-            if now > expiry:
-                _LOGGER.info(
-                    "Dropping deferred scene target for zone %d - its sensor did "
-                    "not recover within the retry window",
-                    index,
-                )
-                del self._deferred_zones[index]
-                continue
+        for index, target in list(self._zone_targets.items()):
             zone = by_index.get(index)
-            if zone is None or zone.get("SensorFault"):
-                continue  # still faulted (or gone), keep waiting
-            try:
-                await self.api.async_set_zone_mode(index, ZoneMode(mode))
-                if setpoint is not None:
-                    await self.api.async_set_zone_setpoint(index, setpoint / 100)
-            except IZoneError as err:
-                _LOGGER.debug(
-                    "Deferred re-apply for zone %d failed, will retry: %s", index, err
-                )
+            if zone is None:
                 continue
-            _LOGGER.info(
-                "Zone %d sensor recovered - applied its deferred scene target", index
+            step = next_target_step(
+                target,
+                zone,
+                now,
+                resend_after=ZONE_TARGET_RESEND,
+                max_sends=ZONE_TARGET_MAX_SENDS,
             )
-            del self._deferred_zones[index]
+            if step is TargetStep.WAIT:
+                continue
+            name = f"{clean_string(zone.get('Name')) or 'Zone'} (zone {index})"
+            if step in (TargetStep.SEND_MODE, TargetStep.SEND_SETPOINT):
+                await self._send_zone_target(name, index, target, step, now)
+                continue
+
+            del self._zone_targets[index]
+            if step is TargetStep.REACHED:
+                how = [
+                    *(["once its sensor recovered"] if target.waited_for_sensor else []),
+                    *([f"after {target.sends} follow-up command(s)"] if target.sends else []),
+                ]
+                if how:
+                    _LOGGER.info(
+                        "%s reached its '%s' target %s",
+                        name,
+                        target.source,
+                        ", ".join(how),
+                    )
+            elif step is TargetStep.OVERRIDDEN:
+                _LOGGER.info(
+                    "%s was changed outside '%s' (now mode %s, setpoint %s) - "
+                    "leaving it as set",
+                    name,
+                    target.source,
+                    zone.get("Mode"),
+                    zone.get("Setpoint"),
+                )
+            elif step is TargetStep.EXPIRED:
+                _LOGGER.info(
+                    "Stopped waiting for %s to take its '%s' target (%s)",
+                    name,
+                    target.source,
+                    "its sensor never recovered"
+                    if zone.get("SensorFault")
+                    else "timed out",
+                )
+            else:  # EXHAUSTED
+                _LOGGER.warning(
+                    "%s still hasn't taken its '%s' target (mode %s, setpoint %s) "
+                    "after %d follow-up commands - giving up; it reads mode %s, setpoint %s",
+                    name,
+                    target.source,
+                    target.mode,
+                    target.setpoint,
+                    target.sends,
+                    zone.get("Mode"),
+                    zone.get("Setpoint"),
+                )
+
+    async def _send_zone_target(
+        self, name: str, index: int, target: ZoneTarget, step: TargetStep, now: float
+    ) -> None:
+        """Send the missing part of a zone target, recording the attempt."""
+        target.sends += 1
+        try:
+            if step is TargetStep.SEND_MODE:
+                target.mode_sent = now
+                await self.api.async_set_zone_mode(index, ZoneMode(target.mode))
+            else:
+                target.setpoint_sent = now
+                await self.api.async_set_zone_setpoint(
+                    index, (target.setpoint or 0) / 100
+                )
+        except IZoneError as err:
+            _LOGGER.debug(
+                "Sending %s's '%s' target failed, will retry: %s",
+                name,
+                target.source,
+                err,
+            )
+            return
+        _LOGGER.debug(
+            "%s: sent %s for its '%s' target (follow-up %d)",
+            name,
+            "mode" if step is TargetStep.SEND_MODE else "setpoint",
+            target.source,
+            target.sends,
+        )
 
     async def _async_update_data(self) -> IZoneData:
         try:
@@ -149,7 +251,7 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
                 await self.api.async_get_zone(index)
                 for index in range(int(system.get("NoOfZones", 0)))
             ]
-            await self._reapply_deferred(zones)
+            await self._reconcile_zone_targets(zones)
         except IZoneError as err:
             raise UpdateFailed(str(err)) from err
         return IZoneData(

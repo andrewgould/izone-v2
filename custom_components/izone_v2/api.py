@@ -28,7 +28,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import IntEnum
+from enum import IntEnum, StrEnum
 from typing import Any
 
 import aiohttp
@@ -248,6 +248,108 @@ def favourite_mismatches(
                     {"zone": index, "reason": "setpoint", "want": want_sp, "got": got_sp}
                 )
     return out
+
+
+class TargetStep(StrEnum):
+    """What to do next for one pending zone target (see :func:`next_target_step`)."""
+
+    WAIT = "wait"
+    SEND_MODE = "send_mode"
+    SEND_SETPOINT = "send_setpoint"
+    REACHED = "reached"
+    OVERRIDDEN = "overridden"
+    EXPIRED = "expired"
+    EXHAUSTED = "exhausted"
+
+
+@dataclass
+class ZoneTarget:
+    """A zone state we asked for and keep working towards until it's confirmed.
+
+    The controller regularly accepts a command with ``{OK}`` and then doesn't
+    act on it, and a zone whose wireless sensor has dropped out can't take a
+    climate target at all until the sensor comes back. So a target outlives
+    the command that set it: every poll compares it with the zone and re-sends
+    whatever part is still missing.
+
+    `setpoint` is a wire temperature (Celsius x100) and only meaningful for an
+    Auto target. `mode_sent` / `setpoint_sent` are monotonic times of the last
+    send of each part (None = never), `sends` counts re-sends, and `last_seen`
+    is the zone's (mode, setpoint) at the previous fault-free poll - used to
+    notice someone else changing the zone.
+    """
+
+    mode: int
+    setpoint: int | None
+    expires: float
+    source: str = ""
+    mode_sent: float | None = None
+    setpoint_sent: float | None = None
+    sends: int = 0
+    last_seen: tuple[int, int] | None = None
+    waited_for_sensor: bool = False
+
+
+def next_target_step(
+    target: ZoneTarget,
+    zone: dict[str, Any],
+    now: float,
+    *,
+    resend_after: float,
+    max_sends: int,
+) -> TargetStep:
+    """Decide the next step towards a pending zone target.
+
+    Updates ``target.last_seen`` / ``target.waited_for_sensor`` as a side
+    effect; the caller performs any send and records it on the target.
+
+    Rules, learned on real hardware:
+
+    - A zone with a faulted sensor is reported as Close by the controller and
+      resumes its *own* remembered mode/setpoint once the sensor comes back -
+      so while faulted, neither confirm nor send; judge it after recovery.
+    - A setpoint sent to a zone that isn't under climate control is thrown
+      away (the controller just switches the zone to Auto at its old
+      setpoint). So the mode always goes first, and the setpoint is only sent
+      once the zone reads back as Auto.
+    - A field that changes to something other than the target means someone
+      else (the app, the wall controller) changed the zone: their newer intent
+      wins and the target is abandoned.
+    """
+    if now >= target.expires:
+        return TargetStep.EXPIRED
+    if zone.get("SensorFault"):
+        target.last_seen = None
+        target.waited_for_sensor = True
+        return TargetStep.WAIT
+
+    mode = int(zone.get("Mode", -1))
+    setpoint = int(zone.get("Setpoint", -1))
+    auto = target.mode == ZoneMode.AUTO
+    if mode == target.mode and (not auto or setpoint == target.setpoint):
+        return TargetStep.REACHED
+
+    seen, target.last_seen = target.last_seen, (mode, setpoint)
+    if seen is not None:
+        mode_moved_away = mode != seen[0] and mode != target.mode
+        setpoint_moved_away = (
+            auto
+            and mode == seen[0] == ZoneMode.AUTO
+            and setpoint != seen[1]
+            and setpoint != target.setpoint
+        )
+        if mode_moved_away or setpoint_moved_away:
+            return TargetStep.OVERRIDDEN
+
+    if mode != target.mode:
+        step, last_sent = TargetStep.SEND_MODE, target.mode_sent
+    else:  # right mode, wrong setpoint - only possible for an Auto target
+        step, last_sent = TargetStep.SEND_SETPOINT, target.setpoint_sent
+    if last_sent is not None and now - last_sent < resend_after:
+        return TargetStep.WAIT  # give the last send time to land
+    if target.sends >= max_sends:
+        return TargetStep.EXHAUSTED
+    return step
 
 
 def clean_string(value: Any) -> str:
