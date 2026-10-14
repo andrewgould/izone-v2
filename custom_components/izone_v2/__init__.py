@@ -10,10 +10,11 @@ from typing import Any
 
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import NOTIFICATION_PORT, NOTIFICATION_PREFIX, IZoneApi
-from .const import CONF_HOST
+from .const import CONF_HOST, DOMAIN, MANUFACTURER
 from .coordinator import IZoneConfigEntry, IZoneCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,6 +35,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: IZoneConfigEntry) -> boo
     coordinator = IZoneCoordinator(hass, entry, api)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
+
+    # Register the bridge device up front: the per-zone devices link to it by
+    # its registry device id (via_device_id), which only exists once it's
+    # registered, and platforms don't set up in a guaranteed order.
+    uid = coordinator.data.uid
+    bridge = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, uid)},
+        manufacturer=MANUFACTURER,
+        model="iZone bridge (V2 local API)",
+        name=f"iZone {uid}",
+    )
+    coordinator.bridge_device_id = bridge.id
 
     # The bridge broadcasts content-free iZoneChanged_System / _Zones /
     # _Schedules strings on UDP 7005. A controlled test showed a real state

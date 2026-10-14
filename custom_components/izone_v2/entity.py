@@ -25,12 +25,10 @@ class IZoneEntity(CoordinatorEntity[IZoneCoordinator]):
 
     def __init__(self, coordinator: IZoneCoordinator) -> None:
         super().__init__(coordinator)
-        uid = coordinator.data.uid
+        # The bridge device itself is registered in async_setup_entry; this
+        # just attaches the entity to it.
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, uid)},
-            manufacturer=MANUFACTURER,
-            model="iZone bridge (V2 local API)",
-            name=f"iZone {uid}",
+            identifiers={(DOMAIN, coordinator.data.uid)}
         )
 
     @property
@@ -62,7 +60,7 @@ class IZoneZoneEntity(IZoneEntity):
         name = zone_display_name(coordinator.data.zones[self._index])
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{uid}_zone{self._index}")},
-            via_device=(DOMAIN, uid),
+            via_device_id=coordinator.bridge_device_id,
             manufacturer=MANUFACTURER,
             model="iZone zone",
             name=name,

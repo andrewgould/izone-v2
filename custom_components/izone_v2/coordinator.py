@@ -61,6 +61,9 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
             update_interval=timedelta(seconds=POLL_INTERVAL),
         )
         self.api = api
+        # Registry id of the bridge device, set by async_setup_entry once the
+        # device is registered; zone devices link to it via via_device_id.
+        self.bridge_device_id: str | None = None
         # Monotonic timestamps of recent failed commands, for the
         # bridge-overload signal. Bounded so a runaway can't grow unbounded.
         self._command_failures: deque[float] = deque(maxlen=64)
