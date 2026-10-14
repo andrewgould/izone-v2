@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 814 256" width="814" height="256">
+  <image href="icon.svg" x="0" y="0" width="256" height="256"/>
+  <text x="300" y="150" font-family="Avenir Next" font-weight="700" font-size="124" fill="#0A3F63" letter-spacing="-2">iZone V2</text>
+  <text x="306" y="214" font-family="Avenir Next" font-weight="600" font-size="44" fill="#0E7C93" letter-spacing="9">LOCAL API</text>
+</svg>

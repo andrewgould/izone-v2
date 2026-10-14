@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="custom_components/izone_v2/brand/dark_logo@2x.png">
+  <img alt="iZone V2 local API" src="custom_components/izone_v2/brand/logo@2x.png" height="96">
+</picture>
+
 # iZone V2 — Home Assistant custom integration
 
 [![CI](https://github.com/andrewgould/izone-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/andrewgould/izone-v2/actions/workflows/ci.yml)
