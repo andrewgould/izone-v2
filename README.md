@@ -88,12 +88,15 @@ IP address manually.
 | Temperature-controlled zones | `climate` per zone — off (close) / fan-only (open) / heat-cool (climate control) + zone setpoint |
 | Open/close & constant zones | `switch` per zone (on = damper open) |
 | iSave | `switch` (only if the system supports it) |
-| Supply / return air temperature | `sensor` |
+| Supply air temperature | `sensor` |
+| Control temperature | `sensor` — the temperature the unit is run from. The spec calls it return air, but on a zone-controlled system it is the control zone's temperature; attribute `control_zone` |
+| Control zone | `sensor` (diagnostic) — the zone the unit is following right now. It moves between zones, and the unit eases off as that zone nears its setpoint |
+| AC run hours | `sensor` (diagnostic, total increasing) — the controller's run-hours counter (`AcRunH`, not in the published spec) |
 | Zone temperature | `sensor` per zone with a sensor |
 | Damper position | `sensor` per zone (diagnostic) |
 | Wireless sensor battery | `sensor` (full/half/empty, diagnostic) |
 | Wireless sensor signal strength | `sensor` (full/half/quarter/none, diagnostic) |
-| Filter warning, damper fault, sensor fault | `binary_sensor` (diagnostic) |
+| Filter warning, damper fault, sensor fault | `binary_sensor` (diagnostic). The filter warning is the controller's reminder timer running out; attribute `reminder_interval_months` |
 | Bridge overloaded | `binary_sensor` (diagnostic) — on when commands are repeatedly failing |
 | Command failures (recent) | `sensor` (diagnostic) — count of failed commands in the last 5 min |
 | Pending zone changes | `sensor` (diagnostic) — zones still being brought to a scene's target; attributes say which and why |

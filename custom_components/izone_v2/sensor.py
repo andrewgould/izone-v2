@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -32,6 +34,9 @@ BATTERY_LEVELS = {0: "full", 1: "half", 2: "empty"}
 # RfSignalLevel_e
 RF_SIGNAL_LEVELS = {0: "full", 1: "half", 2: "quarter", 3: "none"}
 
+# "CtrlZone" value meaning the unit runs to its own setpoint, not a zone's
+CTRL_ZONE_UNIT = 15
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -43,11 +48,14 @@ async def async_setup_entry(
     entities: list[SensorEntity] = [
         IZoneSupplyTempSensor(coordinator),
         IZoneReturnTempSensor(coordinator),
+        IZoneControlZoneSensor(coordinator),
         IZoneAcErrorSensor(coordinator),
         IZoneSleepRemainingSensor(coordinator),
         IZoneCommandFailuresSensor(coordinator),
         IZonePendingZoneTargetsSensor(coordinator),
     ]
+    if "AcRunH" in coordinator.data.system:
+        entities.append(IZoneRunHoursSensor(coordinator))
     for zone in coordinator.data.zones:
         index = zone["Index"]
         entities.append(IZoneDamperPositionSensor(coordinator, index))
@@ -78,9 +86,16 @@ class IZoneSupplyTempSensor(IZoneEntity, SensorEntity):
 
 
 class IZoneReturnTempSensor(IZoneEntity, SensorEntity):
-    """Return air temperature."""
+    """The temperature the AC unit is being controlled from.
 
-    _attr_name = "Return air temperature"
+    The spec calls the system "Temp" field the return air temperature. On a
+    system controlled by its zones it is the control zone's own temperature:
+    on a real system it matched the zone named by "CtrlZone" exactly in five
+    snapshots out of five, while CtrlZone moved between zones. Named for what
+    it is, keeping the original unique_id (and so the entity_id).
+    """
+
+    _attr_name = "Control temperature"
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
@@ -92,6 +107,74 @@ class IZoneReturnTempSensor(IZoneEntity, SensorEntity):
     @property
     def native_value(self) -> float | None:
         return temp_from_wire(self.system.get("Temp"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"control_zone": control_zone_name(self.coordinator)}
+
+
+def control_zone_name(coordinator: IZoneCoordinator) -> str | None:
+    """Name of the zone the unit is controlled from ("CtrlZone").
+
+    15 means the unit's own setpoint rather than a zone.
+    """
+    try:
+        index = int(coordinator.data.system.get("CtrlZone"))
+    except (TypeError, ValueError):
+        return None
+    if index == CTRL_ZONE_UNIT:
+        return "Unit setpoint"
+    for zone in coordinator.data.zones:
+        if zone.get("Index") == index:
+            return clean_string(zone.get("Name")) or f"Zone {index + 1}"
+    return f"Zone {index + 1}"
+
+
+class IZoneControlZoneSensor(IZoneEntity, SensorEntity):
+    """Which zone the AC unit is following right now.
+
+    The controller moves this between zones as their demand changes, and
+    the unit throttles back as that zone nears its setpoint, so it explains
+    the unit easing off while other zones still want air.
+    """
+
+    _attr_name = "Control zone"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:home-thermometer-outline"
+
+    def __init__(self, coordinator: IZoneCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.data.uid}_control_zone"
+
+    @property
+    def native_value(self) -> str | None:
+        return control_zone_name(self.coordinator)
+
+
+class IZoneRunHoursSensor(IZoneEntity, SensorEntity):
+    """The controller's AC run-hours counter ("AcRunH").
+
+    Not in the published spec, but present on real bridges and counting up
+    (1717 h in July 2026, 3676 h in October on one system).
+    """
+
+    _attr_name = "AC run hours"
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfTime.HOURS
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:timer-outline"
+
+    def __init__(self, coordinator: IZoneCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.data.uid}_ac_run_hours"
+
+    @property
+    def native_value(self) -> int | None:
+        try:
+            return int(self.system["AcRunH"])
+        except (KeyError, TypeError, ValueError):
+            return None
 
 
 class IZoneAcErrorSensor(IZoneEntity, SensorEntity):

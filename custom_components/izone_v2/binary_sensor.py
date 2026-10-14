@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
@@ -49,6 +51,12 @@ class IZoneFilterWarningSensor(IZoneEntity, BinarySensorEntity):
     def is_on(self) -> bool:
         # Documented values for "Warnings": "none", "filter"
         return clean_string(self.system.get("Warnings")).lower() == "filter"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        # "FilterWarn": the reminder interval set on the controller, in months.
+        # The warning is that timer running out, not a measurement of the filter.
+        return {"reminder_interval_months": self.system.get("FilterWarn")}
 
 
 class IZoneBridgeOverloadedSensor(IZoneEntity, BinarySensorEntity):
