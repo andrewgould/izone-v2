@@ -22,5 +22,62 @@
     "abort": {
       "already_configured": "This iZone system is already configured"
     }
+  },
+  "services": {
+    "update_favourite": {
+      "name": "Update favourite",
+      "description": "Changes what an iZone favourite stores: one zone's mode and setpoint, the fan, and/or the AC mode. The change is saved on the controller, so the iZone app and wall controller see it too. Nothing is applied until the favourite is next activated.",
+      "fields": {
+        "zone": {
+          "name": "Zone",
+          "description": "The zone to change, by name as shown in the iZone app (any case), or its number (1 = first zone)."
+        },
+        "zone_mode": {
+          "name": "Zone mode",
+          "description": "What the favourite does to the zone: open, close, or auto (temperature control). Leave out to keep the stored mode."
+        },
+        "temperature": {
+          "name": "Temperature",
+          "description": "The zone's setpoint, 15-30 °C in 0.5° steps. Leave out to keep the stored setpoint."
+        },
+        "fan": {
+          "name": "Fan",
+          "description": "The fan speed the favourite sets. Unset leaves the fan as it is."
+        },
+        "mode": {
+          "name": "AC mode",
+          "description": "The AC mode the favourite sets. Unset leaves the mode as it is."
+        }
+      }
+    }
+  },
+  "selector": {
+    "zone_mode": {
+      "options": {
+        "open": "Open",
+        "close": "Close",
+        "auto": "Auto (temperature control)"
+      }
+    },
+    "fan": {
+      "options": {
+        "unset": "Unset (leave alone)",
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "auto": "Auto",
+        "top": "Top"
+      }
+    },
+    "mode": {
+      "options": {
+        "unset": "Unset (leave alone)",
+        "cool": "Cool",
+        "heat": "Heat",
+        "vent": "Vent",
+        "dry": "Dry",
+        "auto": "Auto"
+      }
+    }
   }
 }

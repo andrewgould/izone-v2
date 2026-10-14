@@ -1,0 +1,47 @@
+update_favourite:
+  target:
+    entity:
+      integration: izone_v2
+      domain: scene
+  fields:
+    zone:
+      example: Front office
+      selector:
+        text:
+    zone_mode:
+      selector:
+        select:
+          translation_key: zone_mode
+          options:
+            - open
+            - close
+            - auto
+    temperature:
+      selector:
+        number:
+          min: 15
+          max: 30
+          step: 0.5
+          unit_of_measurement: "°C"
+    fan:
+      selector:
+        select:
+          translation_key: fan
+          options:
+            - unset
+            - low
+            - medium
+            - high
+            - auto
+            - top
+    mode:
+      selector:
+        select:
+          translation_key: mode
+          options:
+            - unset
+            - cool
+            - heat
+            - vent
+            - dry
+            - auto

@@ -29,6 +29,14 @@ OVERLOAD_THRESHOLD = 3
 SCENE_VERIFY_RETRIES = 2
 SCENE_VERIFY_DELAY = 2.0
 
+# Editing a favourite (izone_v2.update_favourite): the controller answers
+# {ERROR} to a favourite command that arrives ~0.3s after the previous one, and
+# keeps it with a 1-2s gap (measured 15 Oct 2026). Each favourite command is
+# followed by this pause, and whatever the read-back shows didn't stick is
+# re-sent, for up to FAVOURITE_EDIT_ATTEMPTS rounds.
+FAVOURITE_WRITE_SETTLE = 2.0
+FAVOURITE_EDIT_ATTEMPTS = 3
+
 # Zone targets set by a scene (or a setpoint that has to wait for its zone to
 # switch to climate control) are kept and checked on every poll until the zone
 # matches. Whatever is still missing is re-sent at most once per

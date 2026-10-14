@@ -212,6 +212,80 @@ def plan_favourite_zones(
     return plan
 
 
+# A favourite always carries 14 zone slots on the wire, whatever NoOfZones is.
+FAVOURITE_ZONE_SLOTS = 14
+# Zone setpoint limits for a favourite (wire units, Celsius x100), per the
+# "Set Schedule Zone Settings" spec: 1500-3000 in steps of 50.
+FAVOURITE_SETPOINT_MIN = 1500
+FAVOURITE_SETPOINT_MAX = 3000
+FAVOURITE_SETPOINT_STEP = 50
+
+
+def favourite_zones_with(
+    favourite: dict[str, Any], index: int, mode: int, setpoint: int | None
+) -> list[dict[str, int]]:
+    """The full 14-zone ``SchedZones`` list with one zone changed.
+
+    ``SchedZones`` replaces every zone of the favourite at once, so the other
+    zones are copied from the favourite as stored. ``setpoint`` is a wire
+    temperature; None keeps the zone's stored setpoint.
+    """
+    if mode not in (ZoneMode.OPEN, ZoneMode.CLOSE, ZoneMode.AUTO):
+        raise ValueError(f"Favourite zone mode must be open, close or auto, not {mode}")
+    stored = favourite.get("Zones") or []
+    zones = [
+        {
+            "Mode": int(z.get("Mode", ZoneMode.CLOSE)),
+            "Setpoint": int(z.get("Setpoint", 2300)),
+        }
+        for z in stored[:FAVOURITE_ZONE_SLOTS]
+    ]
+    while len(zones) < FAVOURITE_ZONE_SLOTS:
+        zones.append({"Mode": int(ZoneMode.CLOSE), "Setpoint": 2300})
+    if not 0 <= index < FAVOURITE_ZONE_SLOTS:
+        raise ValueError(f"Zone index {index} is outside the favourite's 14 zones")
+    if setpoint is None:
+        setpoint = zones[index]["Setpoint"]
+    if (
+        not FAVOURITE_SETPOINT_MIN <= setpoint <= FAVOURITE_SETPOINT_MAX
+        or setpoint % FAVOURITE_SETPOINT_STEP
+    ):
+        raise ValueError(
+            f"Favourite zone setpoint must be 15-30° in 0.5° steps, not {setpoint / 100}"
+        )
+    zones[index] = {"Mode": int(mode), "Setpoint": int(setpoint)}
+    return zones
+
+
+def describe_favourite_zones(
+    favourite: dict[str, Any], zones: list[dict[str, Any]]
+) -> dict[str, str]:
+    """What a favourite does to each real zone, keyed by zone name.
+
+    For the scene's attributes, e.g. ``{"Living": "auto 20.0", "Rumpus":
+    "close"}``. Constant/bypass zones are controller-managed and left out.
+    """
+    fav_zones = favourite.get("Zones") or []
+    out: dict[str, str] = {}
+    for index, zone in enumerate(zones):
+        if index >= len(fav_zones):
+            break
+        if int(zone.get("ZoneType", 0)) == ZoneType.CONSTANT:
+            continue
+        name = clean_string(zone.get("Name")) or f"Zone {index + 1}"
+        target = fav_zones[index]
+        try:
+            mode = ZoneMode(int(target.get("Mode", 0)))
+        except ValueError:
+            out[name] = "unset"
+            continue
+        if mode == ZoneMode.AUTO:
+            out[name] = f"auto {int(target.get('Setpoint', 0)) / 100:.1f}"
+        else:
+            out[name] = mode.name.lower()
+    return out
+
+
 def favourite_mismatches(
     favourite: dict[str, Any], zones: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -561,14 +635,23 @@ class IZoneApi:
                 f"Bridge {self.host} returned no SchedulesV2 for favourite {index}"
             ) from err
 
-    async def async_command(self, payload: dict[str, Any]) -> None:
-        """Send a command, reporting success/failure for health tracking."""
+    async def async_command(
+        self, payload: dict[str, Any], *, report: bool = True
+    ) -> None:
+        """Send a command, reporting success/failure for health tracking.
+
+        ``report=False`` keeps a command out of the bridge-health count, for
+        commands whose replies aren't a health signal (see the favourite
+        editing wrappers).
+        """
         try:
             await self._send_command(payload)
         except IZoneError:
-            self._report_command_result(ok=False)
+            if report:
+                self._report_command_result(ok=False)
             raise
-        self._report_command_result(ok=True)
+        if report:
+            self._report_command_result(ok=True)
 
     def _report_command_result(self, ok: bool) -> None:
         if self.on_command_result is not None:
@@ -658,3 +741,34 @@ class IZoneApi:
         command takes a 1-based value (1-9).
         """
         await self.async_command({"FavouriteSet": index + 1})
+
+    # Favourite edits: the controller's replies to these are unreliable. It
+    # answers {ERROR} to one sent ~0.3s after the previous command, and has been
+    # seen answering {ERROR} or nothing to edits it did keep (15 Oct 2026). The
+    # caller judges them by reading the favourite back, so they are kept out of
+    # the bridge-health count; otherwise one edit could trip "Bridge
+    # overloaded" and whatever power-cycles the hub on it.
+
+    async def async_set_favourite_zones(
+        self, index: int, zones: list[dict[str, int]]
+    ) -> None:
+        """Replace a favourite's zone settings ("Set Schedule Zone Settings").
+
+        0-based favourite index; ``zones`` is the full 14-zone list, as built
+        by :func:`favourite_zones_with`.
+        """
+        await self.async_command(
+            {"SchedZones": {"Index": index, "Zones": zones}}, report=False
+        )
+
+    async def async_set_favourite_fan(self, index: int, fan: int) -> None:
+        """Set the fan a favourite applies; 0 = leave the fan alone."""
+        await self.async_command(
+            {"SchedAcFan": {"Index": index, "Fan": int(fan)}}, report=False
+        )
+
+    async def async_set_favourite_mode(self, index: int, mode: int) -> None:
+        """Set the AC mode a favourite applies; 0 = leave the mode alone."""
+        await self.async_command(
+            {"SchedAcMode": {"Index": index, "Mode": int(mode)}}, report=False
+        )

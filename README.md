@@ -175,6 +175,35 @@ the integration starts, not on every poll, since they rarely change; reload the
 integration (Settings → Devices & Services → iZone V2 → ⋮ → Reload) after
 adding or renaming a favourite in the iZone app to pick up the change.
 
+Each favourite scene shows what it stores as attributes: `zones` (for example
+`Living: auto 20.0`, `Rumpus: close`), `fan` and `mode` (`unset` means the
+favourite leaves the unit's fan or mode alone), plus `favourite_number`.
+They're read at startup, and again whenever the scene is activated or edited.
+
+**Favourites can be edited from Home Assistant** with the
+`izone_v2.update_favourite` action, using the documented "Set Schedule Zone
+Settings", "Change Schedule AC Fan" and "Change Schedule AC Mode" commands. The
+edit is saved on the controller, so the iZone app and wall controller see it
+too. Nothing is applied until the favourite is next activated.
+
+```yaml
+action: izone_v2.update_favourite
+target:
+  entity_id: scene.izone_000104158_morning_heating
+data:
+  zone: Front office    # name as in the iZone app, any case, or zone number
+  zone_mode: close      # open | close | auto
+  # temperature: 19     # 15-30 in 0.5 steps; leave out to keep the stored one
+  # fan: high           # unset | low | medium | high | auto | top
+  # mode: heat          # unset | cool | heat | vent | dry | auto
+```
+
+One call changes one zone, but the fan and mode can go in the same call.
+Constant (bypass) zones are refused, because the controller manages them. So is
+`auto` on a zone without a temperature sensor. The integration reads the
+favourite back afterwards and reports an error if the controller didn't keep
+the change.
+
 When a favourite scene is activated, the integration **reads the zones back and
 confirms** they match the favourite's stored config, re-applying a couple of
 times if they don't (controller-managed constant zones are skipped).

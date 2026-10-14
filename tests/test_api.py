@@ -99,6 +99,65 @@ def test_favourite_target_reached_ignores_zones_beyond_favourite() -> None:
     assert api.favourite_target_reached(_fav((3, 2100)), [_zone(3, 2100), _zone(2, 0)])
 
 
+def _named(name: str, mode: int = 3, ztype: int = 3) -> dict:
+    return {"Name": name, "Mode": mode, "Setpoint": 2000, "ZoneType": ztype}
+
+
+def test_favourite_zones_with_changes_one_zone_and_pads_to_14() -> None:
+    fav = _fav((3, 2000), (2, 2300), (3, 1900))
+    zones = api.favourite_zones_with(fav, 2, api.ZoneMode.CLOSE, None)
+    assert len(zones) == api.FAVOURITE_ZONE_SLOTS
+    assert zones[:3] == [
+        {"Mode": 3, "Setpoint": 2000},
+        {"Mode": 2, "Setpoint": 2300},
+        {"Mode": 2, "Setpoint": 1900},  # setpoint kept when not given
+    ]
+    assert zones[3] == {"Mode": 2, "Setpoint": 2300}
+
+
+def test_favourite_zones_with_sets_setpoint() -> None:
+    zones = api.favourite_zones_with(_fav((2, 2300)), 0, api.ZoneMode.AUTO, 2150)
+    assert zones[0] == {"Mode": 3, "Setpoint": 2150}
+
+
+@pytest.mark.parametrize(
+    ("mode", "setpoint", "index"),
+    [
+        (api.ZoneMode.OVERRIDE, None, 0),  # not a favourite zone mode
+        (api.ZoneMode.AUTO, 1400, 0),  # below 15.0
+        (api.ZoneMode.AUTO, 3050, 0),  # above 30.0
+        (api.ZoneMode.AUTO, 2025, 0),  # not a 0.5 step
+        (api.ZoneMode.OPEN, None, 14),  # beyond the 14 slots
+    ],
+)
+def test_favourite_zones_with_rejects_invalid(mode, setpoint, index) -> None:
+    with pytest.raises(ValueError):
+        api.favourite_zones_with(_fav((3, 2000)), index, mode, setpoint)
+
+
+def test_favourite_zones_with_leaves_the_stored_favourite_alone() -> None:
+    fav = _fav((3, 2000))
+    api.favourite_zones_with(fav, 0, api.ZoneMode.CLOSE, None)
+    assert fav == _fav((3, 2000))
+
+
+def test_describe_favourite_zones() -> None:
+    fav = _fav((3, 2000), (2, 2300), (1, 2300), (2, 2300), (0, 2300))
+    zones = [
+        _named("Living\x00\xff"),
+        _named("Rumpus"),
+        _named("Laundry", ztype=1),
+        _named("Bypass", ztype=2),
+        _named(""),
+    ]
+    assert api.describe_favourite_zones(fav, zones) == {
+        "Living": "auto 20.0",
+        "Rumpus": "close",
+        "Laundry": "open",
+        "Zone 5": "unset",
+    }
+
+
 def test_plan_favourite_zones_applies_healthy() -> None:
     plan = api.plan_favourite_zones(_fav((3, 2100), (2, 2300)), [_zone(2, 0), _zone(3, 0)])
     assert plan == [
@@ -411,6 +470,42 @@ async def test_commands_match_official_spec(bridge: MockBridge) -> None:
         {"ZoneMinAir": {"Index": 0, "MinAir": 20}},
         {"ZoneMaxAir": {"Index": 0, "MaxAir": 90}},
     ]
+
+@pytest.mark.parametrize("reply", [b"{ERROR}", b""])
+async def test_favourite_edit_failures_stay_out_of_bridge_health(reply: bytes) -> None:
+    mock = MockBridge(command_reply=reply)
+    await mock.server.start_server()
+    results: list[bool] = []
+    try:
+        async with ClientSession() as session:
+            client = api.IZoneApi(session, mock.host)
+            client.on_command_result = results.append
+            with pytest.raises(api.IZoneError):
+                await client.async_set_favourite_fan(1, api.SysFan.HIGH)
+            with pytest.raises(api.IZoneError):
+                await client.async_set_favourite_mode(1, api.SysMode.HEAT)
+            with pytest.raises(api.IZoneError):
+                await client.async_set_favourite_zones(1, [])
+    finally:
+        await mock.server.close()
+    assert results == []
+
+
+async def test_favourite_edit_commands_match_official_spec(bridge: MockBridge) -> None:
+    zones = api.favourite_zones_with(_fav((3, 2000)), 0, api.ZoneMode.CLOSE, None)
+    async with ClientSession() as session:
+        client = api.IZoneApi(session, bridge.host)
+        await client.async_set_favourite_zones(1, zones)
+        await client.async_set_favourite_fan(1, api.SysFan.HIGH)
+        await client.async_set_favourite_fan(1, 0)
+        await client.async_set_favourite_mode(8, api.SysMode.HEAT)
+    assert bridge.commands == [
+        {"SchedZones": {"Index": 1, "Zones": zones}},
+        {"SchedAcFan": {"Index": 1, "Fan": 3}},
+        {"SchedAcFan": {"Index": 1, "Fan": 0}},
+        {"SchedAcMode": {"Index": 8, "Mode": 2}},
+    ]
+
 
 
 @pytest.mark.parametrize("reply", [b"OK", b"{OK}", b'"OK"', b" OK \r\n"])
