@@ -21,7 +21,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import SysFan, SysMode, ZoneMode, ZoneType, temp_from_wire
+from .api import SysFan, SysMode, ZoneMode, ZoneType, allowed_fans, temp_from_wire
 from .coordinator import IZoneConfigEntry, IZoneCoordinator
 from .entity import IZoneEntity, IZoneZoneEntity
 
@@ -151,8 +151,6 @@ class IZoneAcClimate(IZoneEntity, IZoneClimateMixin):
         HVACMode.FAN_ONLY,
         HVACMode.DRY,
     ]
-    # Per the developer docs: 1=Low, 2=Med, 3=High, 4=Auto, 5=Top
-    _attr_fan_modes = [FAN_LOW, FAN_MEDIUM, FAN_HIGH, FAN_AUTO, FAN_TOP]
 
     def __init__(self, coordinator: IZoneCoordinator) -> None:
         super().__init__(coordinator)
@@ -167,6 +165,15 @@ class IZoneAcClimate(IZoneEntity, IZoneClimateMixin):
     @property
     def fan_mode(self) -> str | None:
         return FAN_TO_HA.get(int(self.system.get("SysFan", 0)))
+
+    @property
+    def fan_modes(self) -> list[str]:
+        # Only the speeds this unit's fan has (FanAutoEn/FanAutoType), plus the
+        # current one if the controller reports a speed outside that list.
+        modes = [FAN_TO_HA[fan] for fan in allowed_fans(self.system)]
+        if (current := self.fan_mode) and current not in modes:
+            modes.append(current)
+        return modes
 
     @property
     def current_temperature(self) -> float | None:

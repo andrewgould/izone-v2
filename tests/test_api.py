@@ -680,3 +680,49 @@ async def test_commands_are_paced_but_reads_are_not(
         assert 0.05 not in sleeps
         await client.async_command({"SysOn": 1})  # a command - must be paced
         assert 0.05 in sleeps
+
+
+# --- zeroed snapshots and fan speeds ---------------------------------------
+
+# A COCBH-4F5 4.36 bridge (Oct 2026): a paced read while cooling, and the
+# zeroed reply it sometimes gives instead, a minute apart.
+REAL_SYSTEM = {"SysOn": 1, "SysMode": 1, "SysFan": 4, "Supply": 884, "Setpoint": 2000,
+               "Temp": 1454, "NoOfZones": 9, "FanAutoEn": 1, "FanAutoType": 1}
+ZEROED_SYSTEM = {"SysOn": 0, "SysMode": 0, "SysFan": 0, "Supply": 0, "Setpoint": 0,
+                 "Temp": 0, "NoOfZones": 9, "FanAutoEn": 1, "FanAutoType": 1}
+
+
+def test_system_snapshot_valid() -> None:
+    assert api.system_snapshot_valid(REAL_SYSTEM)
+    assert not api.system_snapshot_valid(ZEROED_SYSTEM)
+    # A real "off" keeps its mode and fan, so it still counts as real data
+    assert api.system_snapshot_valid({**REAL_SYSTEM, "SysOn": 0})
+    assert not api.system_snapshot_valid({**REAL_SYSTEM, "SysFan": 0})
+    assert not api.system_snapshot_valid({})
+
+
+def test_zone_snapshot_valid() -> None:
+    assert api.zone_snapshot_valid({"Index": 0, "Mode": 3, "Setpoint": 2200})
+    assert api.zone_snapshot_valid({"Index": 6, "Mode": 2, "Setpoint": 2200})
+    assert not api.zone_snapshot_valid({"Index": 0, "Mode": 0, "Setpoint": 2200, "Temp": 0})
+    assert not api.zone_snapshot_valid({"Index": 0})
+
+
+F = api.SysFan
+
+
+@pytest.mark.parametrize(
+    ("auto_en", "auto_type", "expected"),
+    [
+        (1, 1, [F.LOW, F.MED, F.HIGH, F.AUTO]),  # 3-speed, as on the bridge above
+        (1, 0, [F.LOW, F.HIGH, F.AUTO]),  # 2-speed
+        (1, 2, [F.LOW, F.MED, F.HIGH, F.AUTO]),  # variable speed
+        (1, 3, [F.LOW, F.MED, F.HIGH, F.TOP, F.AUTO]),  # 4-speed
+        (1, 9, list(F)),  # unknown type: every speed
+        (0, 3, [F.LOW, F.MED, F.HIGH]),  # fan auto disabled
+        (None, None, [F.LOW, F.MED, F.HIGH]),
+    ],
+)
+def test_allowed_fans(auto_en, auto_type, expected) -> None:
+    system = {"FanAutoEn": auto_en, "FanAutoType": auto_type}
+    assert api.allowed_fans(system) == expected

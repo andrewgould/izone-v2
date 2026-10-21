@@ -14,6 +14,11 @@ MANUFACTURER = "iZone (Airstream Components)"
 # a real change), but polling is what guarantees state stays current if one is
 # missed.
 POLL_INTERVAL = 30
+# A poll the bridge answers with zeroed data (see api.system_snapshot_valid)
+# keeps the last good state. If it's still zeroed after this long, the
+# controller has probably stopped talking to the bridge, so the update fails
+# and entities go unavailable.
+EMPTY_SNAPSHOT_GRACE = 300  # seconds
 # Firmware only changes when someone updates it from the iZone app, so read it
 # rarely: the bridge is a slow single-connection server.
 FIRMWARE_INTERVAL = 6 * 3600  # seconds

@@ -465,6 +465,48 @@ def temp_from_wire(value: Any) -> float | None:
     return temp
 
 
+def _wire_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def system_snapshot_valid(system: dict[str, Any]) -> bool:
+    """Whether a SystemV2 datagram carries real controller data.
+
+    Now and then the bridge answers HTTP 200 with every live field zeroed
+    (SysOn, SysMode, SysFan, Supply, Setpoint and Temp all 0) while the unit is
+    running; taken at face value that's a ~1 minute "off" blip (Oct 2026).
+    0 is the ``_Na`` member of SysMode_e and SysFan_e, never a real setting.
+    """
+    return _wire_int(system.get("SysMode")) != 0 and _wire_int(system.get("SysFan")) != 0
+
+
+def zone_snapshot_valid(zone: dict[str, Any]) -> bool:
+    """Whether a ZonesV2 datagram carries real data (Mode 0 is ``ZoneMode_Na``)."""
+    return _wire_int(zone.get("Mode")) != 0
+
+
+# FanAutoType_e (iZone_JSON_datastrings.h v1.41) -> the speeds that fan has.
+# Same reading as python-izone: auto disabled means low/med/high only, and an
+# unknown type gets every speed.
+_FAN_SPEEDS = {
+    0: (SysFan.LOW, SysFan.HIGH, SysFan.AUTO),  # 2-speed
+    1: (SysFan.LOW, SysFan.MED, SysFan.HIGH, SysFan.AUTO),  # 3-speed
+    2: (SysFan.LOW, SysFan.MED, SysFan.HIGH, SysFan.AUTO),  # variable speed
+    3: (SysFan.LOW, SysFan.MED, SysFan.HIGH, SysFan.TOP, SysFan.AUTO),  # 4-speed
+}
+
+
+def allowed_fans(system: dict[str, Any]) -> list[SysFan]:
+    """Fan speeds the unit offers, from SystemV2 ``FanAutoEn``/``FanAutoType``."""
+    if not _wire_int(system.get("FanAutoEn")):
+        return [SysFan.LOW, SysFan.MED, SysFan.HIGH]
+    speeds = _FAN_SPEEDS.get(_wire_int(system.get("FanAutoType")), tuple(SysFan))
+    return list(speeds)
+
+
 class IZoneError(Exception):
     """Base error for the iZone API."""
 

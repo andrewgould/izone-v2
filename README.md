@@ -111,7 +111,7 @@ IP address manually.
 
 | iZone concept | Home Assistant entity |
 |---|---|
-| AC unit | `climate` — off/cool/heat/heat-cool/fan-only/dry, fan low/med/high/auto/top, setpoint (0.5 °C steps, Eco-lock limits respected) |
+| AC unit | `climate` — off/cool/heat/heat-cool/fan-only/dry, the fan speeds the unit has (from `FanAutoType`: low/med/high/auto on a 3-speed fan, plus top on a 4-speed one), setpoint (0.5 °C steps, Eco-lock limits respected) |
 | Temperature-controlled zones | `climate` per zone — off (close) / fan-only (open) / heat-cool (climate control) + zone setpoint |
 | Open/close & constant zones | `switch` per zone (on = damper open) |
 | iSave | `switch` (only if the system supports it) |
@@ -303,3 +303,10 @@ Both reads and commands are retried a couple of times before being reported as
 a failure, so a single dropped request doesn't knock every entity offline.
 Scene entities stay available regardless of poll state, since triggering a
 favourite doesn't depend on fresh data.
+
+Now and then the bridge answers a read with HTTP 200 but every live field
+zeroed (`SysOn`, `SysMode`, `SysFan` and the temperatures all `0`, zones with
+`Mode` 0) while the unit is running. Mode and fan 0 are the spec's `_Na`
+values, so such a reply is ignored and the last state kept. If the replies are
+still zeroed after 5 minutes, the controller has probably stopped talking to
+the bridge, and the entities go unavailable.

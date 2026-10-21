@@ -21,10 +21,13 @@ from .api import (
     ZoneTarget,
     clean_string,
     next_target_step,
+    system_snapshot_valid,
+    zone_snapshot_valid,
 )
 from .const import (
     COMMAND_FAILURE_WINDOW,
     DOMAIN,
+    EMPTY_SNAPSHOT_GRACE,
     FIRMWARE_INTERVAL,
     FIRMWARE_RETRY,
     OVERLOAD_THRESHOLD,
@@ -80,6 +83,9 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
         # successful read.
         self.firmware: dict[str, str] = {}
         self._firmware_due = 0.0
+        # When the bridge started answering with zeroed data, or None while
+        # its answers are real (see _keep_last_snapshot).
+        self._empty_since: float | None = None
 
     @callback
     def _note_command_result(self, ok: bool) -> None:
@@ -286,19 +292,43 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
                     self.bridge_device_id, sw_version=self.hub_firmware
                 )
 
+    def _keep_last_snapshot(self) -> IZoneData:
+        """Ride out a poll the bridge answered with zeroed data.
+
+        The last good state is kept (all of it - a zeroed system and real zones
+        aren't merged) for up to EMPTY_SNAPSHOT_GRACE, then the update fails.
+        """
+        now = self.hass.loop.time()
+        if self._empty_since is None:
+            self._empty_since = now
+            _LOGGER.debug("Bridge answered with zeroed data, keeping the last state")
+        if self.data is None or now - self._empty_since > EMPTY_SNAPSHOT_GRACE:
+            raise UpdateFailed(
+                "Bridge is answering with zeroed data - the controller may not "
+                "be talking to it"
+            )
+        return self.data
+
     async def _async_update_data(self) -> IZoneData:
         try:
             response = await self.api.async_get_system()
             system = response["SystemV2"]
+            if not system_snapshot_valid(system):
+                return self._keep_last_snapshot()
             # Zones must be fetched one at a time (Type 2, No = index) and
             # sequentially - the bridge can't handle concurrent requests.
             zones = [
                 await self.api.async_get_zone(index)
                 for index in range(int(system.get("NoOfZones", 0)))
             ]
+            # Checked before reconciling, so a zeroed zone can't look like one
+            # that needs its target re-sent.
+            if not all(zone_snapshot_valid(zone) for zone in zones):
+                return self._keep_last_snapshot()
             await self._reconcile_zone_targets(zones)
         except IZoneError as err:
             raise UpdateFailed(str(err)) from err
+        self._empty_since = None
         await self._refresh_firmware()
         return IZoneData(
             uid=str(response.get("AirStreamDeviceUId", "")), system=system, zones=zones
