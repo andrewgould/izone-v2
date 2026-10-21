@@ -105,6 +105,7 @@ IP address manually.
 | Bridge overloaded | `binary_sensor` (diagnostic) — on when commands are repeatedly failing |
 | Command failures (recent) | `sensor` (diagnostic) — count of failed commands in the last 5 min |
 | Pending zone changes | `sensor` (diagnostic) — zones still being brought to a scene's target; attributes say which and why |
+| Firmware (hub, wall controller, each board) | `sensor` (diagnostic) per module, e.g. `4.36`; attribute `module` is the part code. Read every 6 hours from request Type 6 (not in the published spec). The hub version also shows on the bridge's device page. Updates can only be installed from the iZone app; these show what's installed and when it changes |
 | Sleep timer | `number` (0–120 min in 30-min steps) |
 | Zone min/max airflow | `number` per zone (config; disabled by default) |
 | Favourites | `scene` per configured favourite (up to 9) |

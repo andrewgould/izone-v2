@@ -10,6 +10,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import (
@@ -24,6 +25,8 @@ from .api import (
 from .const import (
     COMMAND_FAILURE_WINDOW,
     DOMAIN,
+    FIRMWARE_INTERVAL,
+    FIRMWARE_RETRY,
     OVERLOAD_THRESHOLD,
     POLL_INTERVAL,
     ZONE_TARGET_EXPIRY,
@@ -72,6 +75,11 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
         # index. Checked and nudged along on every poll until confirmed (see
         # _reconcile_zone_targets).
         self._zone_targets: dict[int, ZoneTarget] = {}
+        # {module: version} from the Type 6 request, read every
+        # FIRMWARE_INTERVAL (see _refresh_firmware). Empty until the first
+        # successful read.
+        self.firmware: dict[str, str] = {}
+        self._firmware_due = 0.0
 
     @callback
     def _note_command_result(self, ok: bool) -> None:
@@ -244,6 +252,40 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
             target.sends,
         )
 
+    @property
+    def hub_firmware(self) -> str | None:
+        """Version of the hub/bridge module (COCBH-...), if known."""
+        for module, version in self.firmware.items():
+            if module.startswith("COCBH"):
+                return version
+        return next(iter(self.firmware.values()), None)
+
+    async def _refresh_firmware(self) -> None:
+        """Re-read the firmware list when it's due. Never fails the poll.
+
+        It only changes when someone updates the system from the iZone app, so
+        it's read at the first poll and then every FIRMWARE_INTERVAL; a failed
+        read keeps the last known versions and retries after FIRMWARE_RETRY.
+        """
+        now = self.hass.loop.time()
+        if now < self._firmware_due:
+            return
+        try:
+            firmware = await self.api.async_get_firmware()
+        except IZoneError as err:
+            _LOGGER.debug("Firmware read failed, keeping %s: %s", self.firmware, err)
+            self._firmware_due = now + FIRMWARE_RETRY
+            return
+        self._firmware_due = now + FIRMWARE_INTERVAL
+        if firmware != self.firmware:
+            if self.firmware:
+                _LOGGER.info("iZone firmware changed: %s -> %s", self.firmware, firmware)
+            self.firmware = firmware
+            if self.bridge_device_id and self.hub_firmware:
+                dr.async_get(self.hass).async_update_device(
+                    self.bridge_device_id, sw_version=self.hub_firmware
+                )
+
     async def _async_update_data(self) -> IZoneData:
         try:
             response = await self.api.async_get_system()
@@ -257,6 +299,7 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
             await self._reconcile_zone_targets(zones)
         except IZoneError as err:
             raise UpdateFailed(str(err)) from err
+        await self._refresh_firmware()
         return IZoneData(
             uid=str(response.get("AirStreamDeviceUId", "")), system=system, zones=zones
         )

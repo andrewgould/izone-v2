@@ -30,6 +30,7 @@ async def async_get_config_entry_diagnostics(
         "system": async_redact_data(coordinator.data.system, TO_REDACT),
         "zones": coordinator.data.zones,
         "favourites": favourites,
+        "firmware": coordinator.firmware,
         "last_update_success": coordinator.last_update_success,
         "recent_command_failures": coordinator.recent_command_failures,
         "bridge_overloaded": coordinator.bridge_overloaded,

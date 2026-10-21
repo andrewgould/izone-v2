@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
@@ -71,6 +72,9 @@ COMMAND_SETTLE_DELAY = 0.3
 REQUEST_SYSTEM = 1  # -> {"SystemV2": {...}}
 REQUEST_ZONE = 2  # "No" = zone index -> {"ZonesV2": {...}}
 REQUEST_SCHEDULE = 3  # "No" = favourite index -> {"SchedulesV2": {...}}
+# Not in the published spec. Answered by a COCBH-4F5 4.36 hub (Oct 2026):
+# {"Fmw": "COCBH-4F5 4.36 (000104158),CR 3.23,C225-1P9 3.80,CEXT 1.5,C325 1.4"}
+REQUEST_FIRMWARE = 6
 
 # FavouriteSet accepts 1-9 (wire value = 0-based index + 1); documented on
 # https://developer.izone.com.au/docs/reference/schedule/
@@ -426,6 +430,22 @@ def next_target_step(
     return step
 
 
+def parse_firmware(fmw: str | None) -> dict[str, str]:
+    """Split the Type 6 ``Fmw`` string into ``{module: version}``.
+
+    ``"COCBH-4F5 4.36 (000104158),CR 3.23,C225-1P9 3.80"`` ->
+    ``{"COCBH-4F5": "4.36", "CR": "3.23", "C225-1P9": "3.80"}``. The hub's
+    entry carries its UID in brackets, which is dropped. Entries that don't
+    look like ``MODULE VERSION`` are skipped.
+    """
+    modules: dict[str, str] = {}
+    for part in clean_string(fmw).split(","):
+        words = re.sub(r"\(.*?\)", "", part).split()
+        if len(words) >= 2:
+            modules[words[0]] = words[1]
+    return modules
+
+
 def clean_string(value: Any) -> str:
     """Strip firmware padding (NUL / 0xFF bytes) from a wire string."""
     if value is None:
@@ -620,6 +640,14 @@ class IZoneApi:
             raise IZoneError(
                 f"Bridge {self.host} returned no ZonesV2 for zone {index}"
             ) from err
+
+    async def async_get_firmware(self) -> dict[str, str]:
+        """Return ``{module: version}`` for the hub, controller and boards."""
+        data = await self.async_request(REQUEST_FIRMWARE)
+        firmware = parse_firmware(data.get("Fmw"))
+        if not firmware:
+            raise IZoneError(f"Bridge {self.host} returned no firmware list")
+        return firmware
 
     async def async_get_favourite(self, index: int) -> dict[str, Any]:
         """Return the Schedule/Favourite datagram for a saved favourite.

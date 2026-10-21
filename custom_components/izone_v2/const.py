@@ -14,6 +14,10 @@ MANUFACTURER = "iZone (Airstream Components)"
 # a real change), but polling is what guarantees state stays current if one is
 # missed.
 POLL_INTERVAL = 30
+# Firmware only changes when someone updates it from the iZone app, so read it
+# rarely: the bridge is a slow single-connection server.
+FIRMWARE_INTERVAL = 6 * 3600  # seconds
+FIRMWARE_RETRY = 600  # seconds, after a failed read
 
 # Bridge-overload signal: a rolling window (seconds) over which failed
 # commands are counted, and the count at which the "bridge overloaded"

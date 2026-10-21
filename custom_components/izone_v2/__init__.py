@@ -46,6 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: IZoneConfigEntry) -> boo
         manufacturer=MANUFACTURER,
         model="iZone bridge (V2 local API)",
         name=f"iZone {uid}",
+        sw_version=coordinator.hub_firmware,
     )
     coordinator.bridge_device_id = bridge.id
 

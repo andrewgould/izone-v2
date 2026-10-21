@@ -19,6 +19,23 @@ def _no_command_settle(monkeypatch):
 # --- pure helpers ----------------------------------------------------------
 
 
+def test_parse_firmware_real_hub() -> None:
+    # Verbatim from a COCBH-4F5 4.36 hub, Type 6 request (Oct 2026)
+    assert api.parse_firmware(
+        "COCBH-4F5 4.36 (000104158),CR 3.23,C225-1P9 3.80,CEXT 1.5,C325 1.4"
+    ) == {"COCBH-4F5": "4.36", "CR": "3.23", "C225-1P9": "3.80", "CEXT": "1.5", "C325": "1.4"}
+
+
+@pytest.mark.parametrize("raw", [None, "", "\x00\xff\xff", "garbage"])
+def test_parse_firmware_empty_or_malformed(raw) -> None:
+    assert api.parse_firmware(raw) == {}
+
+
+def test_parse_firmware_skips_malformed_entries() -> None:
+    assert api.parse_firmware("COCBH-4F5 4.36 (1),,CR,CEXT 1.5\x00\xff") == {
+        "COCBH-4F5": "4.36", "CEXT": "1.5"}
+
+
 def test_parse_discovery_v2() -> None:
     result = api.parse_discovery_response(
         b"ASPort_12107,Mac_000013170,IP_192.168.1.5,iZoneV2,iLight,X,iPower,Split"
@@ -358,6 +375,12 @@ FAVOURITE_BODIES = [
 ]
 
 
+FIRMWARE_BODY = (
+    b'{"AirStreamDeviceUId":"000013170","DeviceType":"ASH",'
+    b'"Fmw":"COCBH-4F5 4.36 (000013170),CR 3.23,C225-1P9 3.80,CEXT 1.5,C325 1.4"}'
+)
+
+
 class MockBridge:
     """A fake iZone bridge with firmware-realistic quirks."""
 
@@ -391,6 +414,8 @@ class MockBridge:
             body = ZONE_BODIES[query["No"]]
         elif query["Type"] == api.REQUEST_SCHEDULE:
             body = FAVOURITE_BODIES[query["No"]]
+        elif query["Type"] == api.REQUEST_FIRMWARE:
+            body = FIRMWARE_BODY
         else:
             return web.Response(text="InvalidRequest")
         return web.Response(body=body, content_type="application/json")
@@ -418,6 +443,13 @@ async def bridge():
     await mock.server.start_server()
     yield mock
     await mock.server.close()
+
+
+async def test_get_firmware(bridge: MockBridge) -> None:
+    async with ClientSession() as session:
+        client = api.IZoneApi(session, bridge.host)
+        assert await client.async_get_firmware() == {
+            "COCBH-4F5": "4.36", "CR": "3.23", "C225-1P9": "3.80", "CEXT": "1.5", "C325": "1.4"}
 
 
 async def test_query_decodes_non_utf8_body(bridge: MockBridge) -> None:

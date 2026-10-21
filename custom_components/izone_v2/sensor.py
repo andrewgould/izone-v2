@@ -56,6 +56,9 @@ async def async_setup_entry(
     ]
     if "AcRunH" in coordinator.data.system:
         entities.append(IZoneRunHoursSensor(coordinator))
+    entities.extend(
+        IZoneFirmwareSensor(coordinator, module) for module in coordinator.firmware
+    )
     for zone in coordinator.data.zones:
         index = zone["Index"]
         entities.append(IZoneDamperPositionSensor(coordinator, index))
@@ -175,6 +178,50 @@ class IZoneRunHoursSensor(IZoneEntity, SensorEntity):
             return int(self.system["AcRunH"])
         except (KeyError, TypeError, ValueError):
             return None
+
+
+def firmware_label(module: str) -> tuple[str, str]:
+    """(entity name suffix, stable unique-id key) for a firmware module.
+
+    The hub (COCBH-...) and wall controller (CR) get plain names; boards keep
+    their part code, which is what the iZone app's device list shows.
+    """
+    if module.startswith("COCBH"):
+        return "hub", "hub"
+    if module == "CR":
+        return "wall controller", "controller"
+    return module, module.lower()
+
+
+class IZoneFirmwareSensor(IZoneEntity, SensorEntity):
+    """Installed firmware version of one module (hub, wall controller, board).
+
+    Read from the bridge every few hours. Updates themselves can only be
+    installed from the iZone app; this shows what's installed and when it
+    changes.
+    """
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:chip"
+
+    def __init__(self, coordinator: IZoneCoordinator, module: str) -> None:
+        super().__init__(coordinator)
+        self._module = module
+        label, key = firmware_label(module)
+        self._attr_name = f"Firmware {label}"
+        self._attr_unique_id = f"{coordinator.data.uid}_firmware_{key}"
+
+    @property
+    def available(self) -> bool:
+        return self._module in self.coordinator.firmware
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.firmware.get(self._module)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"module": self._module}
 
 
 class IZoneAcErrorSensor(IZoneEntity, SensorEntity):
