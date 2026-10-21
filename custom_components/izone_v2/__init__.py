@@ -62,7 +62,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: IZoneConfigEntry) -> boo
         entry.async_on_unload(transport.close)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: IZoneConfigEntry) -> None:
+    """Apply changed options: clear the notifications if they were turned off."""
+    if not entry.runtime_data.notifications_enabled:
+        entry.runtime_data.dismiss_notifications()
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: IZoneConfigEntry) -> bool:

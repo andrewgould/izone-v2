@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
@@ -20,12 +21,15 @@ from .api import (
     ZoneMode,
     ZoneTarget,
     clean_string,
+    describe_firmware_changes,
     next_target_step,
     system_snapshot_valid,
     zone_snapshot_valid,
 )
 from .const import (
     COMMAND_FAILURE_WINDOW,
+    CONF_NOTIFICATIONS,
+    DEFAULT_NOTIFICATIONS,
     DOMAIN,
     EMPTY_SNAPSHOT_GRACE,
     FIRMWARE_INTERVAL,
@@ -86,6 +90,9 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
         # When the bridge started answering with zeroed data, or None while
         # its answers are real (see _keep_last_snapshot).
         self._empty_since: float | None = None
+        # Whether the filter notification has been raised for the current
+        # warning, so a dismissed notification isn't recreated every poll.
+        self._filter_notified = False
 
     @callback
     def _note_command_result(self, ok: bool) -> None:
@@ -286,6 +293,12 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
         if firmware != self.firmware:
             if self.firmware:
                 _LOGGER.info("iZone firmware changed: %s -> %s", self.firmware, firmware)
+                changes = describe_firmware_changes(self.firmware, firmware)
+                self._notify(
+                    "firmware",
+                    "iZone firmware updated",
+                    "\n".join(f"- {line}" for line in changes),
+                )
             self.firmware = firmware
             if self.bridge_device_id and self.hub_firmware:
                 dr.async_get(self.hass).async_update_device(
@@ -309,6 +322,49 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
             )
         return self.data
 
+    @property
+    def notifications_enabled(self) -> bool:
+        """Whether to raise persistent notifications (integration option)."""
+        return self.config_entry.options.get(CONF_NOTIFICATIONS, DEFAULT_NOTIFICATIONS)
+
+    def _notification_id(self, kind: str) -> str:
+        return f"{DOMAIN}_{self.config_entry.unique_id}_{kind}"
+
+    @callback
+    def _notify(self, kind: str, title: str, message: str) -> None:
+        if self.notifications_enabled:
+            persistent_notification.async_create(
+                self.hass,
+                message,
+                title=title,
+                notification_id=self._notification_id(kind),
+            )
+
+    @callback
+    def dismiss_notifications(self) -> None:
+        """Remove this integration's notifications (option turned off)."""
+        for kind in ("filter", "firmware"):
+            persistent_notification.async_dismiss(self.hass, self._notification_id(kind))
+
+    @callback
+    def _update_filter_notification(self, system: dict[str, Any]) -> None:
+        """Raise the filter notification once per warning; clear it when it goes."""
+        due = clean_string(system.get("Warnings")).lower() == "filter"
+        if due and not self._filter_notified:
+            months = system.get("FilterWarn")
+            interval = f" (its reminder is set to every {months} months)" if months else ""
+            self._notify(
+                "filter",
+                "iZone: filter due for a clean",
+                "The iZone controller says the ducted return-air filter is due a clean"
+                f"{interval}. It's a reminder timer, not a measurement. Reset it on "
+                "the iZone wall controller or in the iZone app after cleaning; this "
+                "notification clears itself when the warning does.",
+            )
+        elif not due and self._filter_notified:
+            persistent_notification.async_dismiss(self.hass, self._notification_id("filter"))
+        self._filter_notified = due
+
     async def _async_update_data(self) -> IZoneData:
         try:
             response = await self.api.async_get_system()
@@ -330,6 +386,7 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
             raise UpdateFailed(str(err)) from err
         self._empty_since = None
         await self._refresh_firmware()
+        self._update_filter_notification(system)
         return IZoneData(
             uid=str(response.get("AirStreamDeviceUId", "")), system=system, zones=zones
         )

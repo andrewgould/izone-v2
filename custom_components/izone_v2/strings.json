@@ -79,5 +79,16 @@
         "auto": "Auto"
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "iZone options",
+        "description": "Persistent notifications appear in Home Assistant when the controller says the filter is due a clean, and when a module's firmware changes.",
+        "data": {
+          "notifications": "Notifications in Home Assistant"
+        }
+      }
+    }
   }
 }

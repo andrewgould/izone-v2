@@ -444,6 +444,26 @@ def parse_firmware(fmw: str | None) -> dict[str, str]:
     return modules
 
 
+def describe_firmware_changes(old: dict[str, str], new: dict[str, str]) -> list[str]:
+    """Human-readable lines for modules whose firmware changed, appeared or went.
+
+    ``{"COCBH-4F5": "4.36"}`` -> ``{"COCBH-4F5": "4.39"}`` gives
+    ``["COCBH-4F5: 4.36 -> 4.39"]``. Unchanged modules are left out.
+    """
+    lines = []
+    for module in [*old, *(m for m in new if m not in old)]:
+        before, after = old.get(module), new.get(module)
+        if before == after:
+            continue
+        if before is None:
+            lines.append(f"{module}: new, {after}")
+        elif after is None:
+            lines.append(f"{module}: no longer reported (was {before})")
+        else:
+            lines.append(f"{module}: {before} -> {after}")
+    return lines
+
+
 def clean_string(value: Any) -> str:
     """Strip firmware padding (NUL / 0xFF bytes) from a wire string."""
     if value is None:

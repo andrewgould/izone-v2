@@ -6,11 +6,23 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import DiscoveredBridge, IZoneApi, IZoneError, async_discover
-from .const import CONF_HOST, CONF_UID, DOMAIN
+from .const import (
+    CONF_HOST,
+    CONF_NOTIFICATIONS,
+    CONF_UID,
+    DEFAULT_NOTIFICATIONS,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,6 +33,12 @@ class IZoneV2ConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle discovery-first setup with a manual-IP fallback."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Options: persistent notifications on/off."""
+        return IZoneV2OptionsFlow()
 
     def __init__(self) -> None:
         self._discovered: dict[str, DiscoveredBridge] = {}
@@ -110,4 +128,19 @@ class IZoneV2ConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cannot_connect"
         return self.async_show_form(
             step_id="manual", data_schema=STEP_MANUAL_SCHEMA, errors=errors
+        )
+
+
+class IZoneV2OptionsFlow(OptionsFlow):
+    """Turn the integration's persistent notifications on or off."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+        current = self.config_entry.options.get(CONF_NOTIFICATIONS, DEFAULT_NOTIFICATIONS)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({vol.Required(CONF_NOTIFICATIONS, default=current): bool}),
         )

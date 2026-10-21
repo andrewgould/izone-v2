@@ -161,6 +161,15 @@ zone name as its *suggested area* — so entities land in the right room by defa
 and can be re-assigned per zone. Diagnostics download is supported for issue
 reports (Settings → Devices → iZone bridge → Download diagnostics).
 
+### Notifications
+
+The integration raises Home Assistant persistent notifications for two things:
+
+- **Filter due for a clean**, while the controller's filter warning is on. It's raised once per warning (dismissing it won't bring it back every poll) and cleared automatically when the warning goes, i.e. after the reminder is reset on the wall controller or in the iZone app.
+- **Firmware updated**, when a module's version changes (checked every 6 hours), listing what changed.
+
+Turn them off under the integration's **Configure** options.
+
 ### Recovering a wedged bridge
 
 The iZone bridge is a single-connection embedded server. If it's hit with a

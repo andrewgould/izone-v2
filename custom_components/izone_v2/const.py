@@ -6,6 +6,10 @@ DOMAIN = "izone_v2"
 
 CONF_HOST = "host"
 CONF_UID = "uid"
+# Option: raise Home Assistant persistent notifications (filter due, firmware
+# updated). On unless turned off in the integration's options.
+CONF_NOTIFICATIONS = "notifications"
+DEFAULT_NOTIFICATIONS = True
 
 MANUFACTURER = "iZone (Airstream Components)"
 

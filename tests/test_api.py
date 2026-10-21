@@ -31,6 +31,17 @@ def test_parse_firmware_empty_or_malformed(raw) -> None:
     assert api.parse_firmware(raw) == {}
 
 
+def test_describe_firmware_changes() -> None:
+    old = {"COCBH-4F5": "4.36", "CR": "3.23", "CEXT": "1.5"}
+    new = {"COCBH-4F5": "4.39", "CR": "3.23", "C325": "1.4"}
+    assert api.describe_firmware_changes(old, new) == [
+        "COCBH-4F5: 4.36 -> 4.39",
+        "CEXT: no longer reported (was 1.5)",
+        "C325: new, 1.4",
+    ]
+    assert api.describe_firmware_changes(old, old) == []
+
+
 def test_parse_firmware_skips_malformed_entries() -> None:
     assert api.parse_firmware("COCBH-4F5 4.36 (1),,CR,CEXT 1.5\x00\xff") == {
         "COCBH-4F5": "4.36", "CEXT": "1.5"}
