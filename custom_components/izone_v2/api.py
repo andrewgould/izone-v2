@@ -101,8 +101,6 @@ class SysFan(IntEnum):
     HIGH = 3
     AUTO = 4
     TOP = 5
-    QUIET = 6
-    TURBO = 7
 
 
 class ZoneType(IntEnum):

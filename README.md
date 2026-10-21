@@ -10,66 +10,88 @@
 
 [![Open your Home Assistant instance and open this repository inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=andrewgould&repository=izone-v2&category=integration)
 
-A replacement for Home Assistant's built-in [`izone`](https://www.home-assistant.io/integrations/izone/)
-integration that speaks the **current, officially documented iZone local API ("V2")**
-from the [iZone Developer Portal](https://developer.izone.com.au/), instead of the
-legacy v1 protocol.
+A Home Assistant custom integration for iZone that speaks the officially
+documented **iZone local API ("V2")** from the
+[iZone Developer Portal](https://developer.izone.com.au/).
 
-## Why this exists — audit of the built-in integration
+> [!NOTE]
+> **Most people should use the built-in integration.** Home Assistant's
+> built-in [`izone`](https://www.home-assistant.io/integrations/izone/)
+> integration is the supported path, and from Home Assistant 2026.11
+> (`python-izone` 1.3.11) it speaks V2 too. This integration is an
+> experimental V2 playground: extra entities, plus workarounds found on one
+> installation with a noisy RF environment. The aim is to fold the useful parts
+> into the built-in integration. Use this one if you need something from
+> [Features only here](#features-only-here-today) that the built-in integration
+> doesn't do yet.
 
-iZone support stated that the Home Assistant integration's "commands to the iZone
-Hub are not correct". An audit of the built-in integration (which delegates all
-protocol work to the [`python-izone` / `pizone`](https://github.com/Swamp-Ig/pizone)
-library) against the Developer Portal documentation found:
+## How this compares to the built-in integration
 
-### What the built-in integration gets right
+This integration started when the built-in one spoke only the legacy v1 API and
+didn't work on this installation. Since then the
+[`python-izone` / `pizone`](https://github.com/Swamp-Ig/pizone) library behind
+the built-in integration has gained V2 support (1.3.11, released October 2026,
+shipping with Home Assistant 2026.11). The comparison below is against that
+version.
 
-- **Discovery** — UDP broadcast `IASD` to `255.255.255.255:12107` matches the
-  current official documentation exactly.
-- **Change notifications** — listening on UDP 7005 for `iZoneChanged_*` matches
-  the official v1 spec. A controlled test showed these are change-driven on this
-  firmware (a real change triggers a content-free broadcast ~3 s later; a no-op
-  triggers none); they just look ~60 s-periodic in passive capture because
-  routine sensor-reading updates keep firing them.
-- **v1 commands** — every command `pizone` sends (`POST /SystemON`,
-  `/SystemMODE`, `/SystemFAN`, `/UnitSetpoint`, `/ZoneCommand`,
-  `/AirMinCommand`, `/AirMaxCommand`, `/SleepTimer`, `/FreeAir`) matches the
-  official *v1* spec PDF — which is byte-identical to the
-  `iZoneEthernetInterface.v1.pdf` still hosted on the Developer Portal today.
+### Protocol: now mostly the same
 
-So "the commands are not correct" is not accurate against iZone's own v1 spec.
+- **V2 reads and writes.** The built-in integration reads over V2 whenever the
+  bridge returns usable data, sends commands through `iZoneCommandV2`, and falls
+  back to v1 only on bridges that need it. This integration is V2-only.
+- **Fan speed *Top*** is sent as `SysFan` 5 over V2, as the spec defines.
+- **HTTP** goes through aiohttp in both. The built-in integration probes
+  whether the bridge wants a `Content-Type` header and remembers the answer.
+- **More than 12 zones.** V2 reads cover every zone in `NoOfZones`.
+- **Discovery** (UDP `IASD` to port 12107) and listening for `iZoneChanged_*`
+  on UDP 7005 match the spec in both.
 
-### What is genuinely wrong / outdated
+### Protocol: what still differs
 
-1. **It only ever speaks the legacy v1 API**, even to bridges that advertise
-   `iZoneV2` in their discovery response. iZone's currently documented and
-   supported local API is V2 (`POST /iZoneRequestV2` and `POST /iZoneCommandV2`
-   with integer enums and temperatures ×100) — a completely different command
-   dialect. Newer hubs/firmware are developed and tested against V2 only;
-   v1 handling on new firmware is exactly where "incorrect commands" symptoms
-   come from.
-2. **Out-of-spec fan value** — `pizone` sends `{"SystemFAN": "top"}`, but the v1
-   spec only defines `low`/`medium`/`high`/`auto`. "Top" exists only in the V2
-   API (`SysFan` = 5).
-3. **Hand-rolled HTTP POST with no `Content-Type` header** —
-   `pizone` bypasses aiohttp and writes a raw request containing only `Host`
-   and `Content-Length`. iZone's official examples send
-   `Content-Type: application/json`; strict embedded parsers can reject the
-   former.
-4. **12-zone ceiling** — v1 status endpoints only cover `Zones1_4/5_8/9_12`
-   (`assert group in [0, 4, 8]`); V2 systems support 14 zones.
-5. **Missing V2 state** — v1 cannot express V2 zone modes *Override*/*Constant*,
-   fan speeds *Quiet*/*Turbo*, or Coolbreeze modes *Exhaust*/*PumpOnly*, so
-   state from newer systems can be misread.
+- **V2-only states.** The built-in integration translates V2 data into its v1
+  vocabulary. Zone modes *Override* (4) and *Constant* (5), and the Coolbreeze
+  unit modes *Exhaust* and *PumpOnly*, have no v1 equivalent, so they currently
+  read as a closed zone and as cool. Here, Override reads as climate control,
+  Constant as open, Exhaust as fan-only and PumpOnly as dry.
+- **`{BUSY}` replies.** This integration paces commands and retries a command
+  the bridge answers with `{BUSY}` (seen here when many zones are commanded at
+  once, or while a damper is still moving). The built-in integration plans to
+  add this.
+- **Change notifications.** This integration treats any `iZoneChanged_*` packet
+  as a prompt to poll early. On this firmware they arrive about 3 s after a real
+  change and never after a no-op, but they have been seen with no link to
+  changes on other hardware. In both integrations the regular poll (30 s here,
+  25 s built-in) is the source of truth.
+- **Request types outside the published spec.** Firmware versions come from
+  request Type 6, which the published spec doesn't cover.
+
+### Features only here (today)
+
+The built-in integration gives you a climate entity for the unit and one per
+zone, supply and return temperature sensors, Free Air as the Eco preset, zone
+airflow limits as services, and diagnostics. This integration adds:
+
+- each zone as its own device, with the zone name as its suggested area
+- damper position, wireless sensor battery and signal strength
+- damper fault, sensor fault and filter warning binary sensors
+- control zone, AC run hours and firmware sensors
+- an iSave switch, a sleep timer number, and zone airflow limits as numbers
+- favourites as scenes, plus a service to edit what a favourite stores
+- bridge health: overloaded, recent command failures, pending zone changes
+- a setpoint sent to a closed zone switches it to climate control first, then
+  sends the setpoint once the zone reads back (the controller otherwise drops
+  it)
+- favourites the controller only partly applies are re-applied and checked
 
 This integration implements the V2 API as documented (verified against
-`iZone_JSON_datastrings.h` v1.41 and iZone's official Postman collection).
+`iZone_JSON_datastrings.h` v1.41, the Developer Portal reference pages and
+iZone's official Postman collection).
 
 ## Requirements
 
 Your bridge must support the V2 API — its discovery response includes
 `iZoneV2`. Almost every hub shipped since ~2017 does. If your bridge responds
-with only `iZone`, keep using the built-in integration (v1 is all it speaks).
+with only `iZone`, use the built-in integration, which also speaks v1.
 
 ## Installation
 

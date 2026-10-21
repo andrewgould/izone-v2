@@ -53,8 +53,6 @@ FAN_TO_HA: dict[int, str] = {
     SysFan.HIGH: FAN_HIGH,
     SysFan.AUTO: FAN_AUTO,
     SysFan.TOP: FAN_TOP,
-    SysFan.QUIET: "quiet",
-    SysFan.TURBO: "turbo",
 }
 HA_TO_FAN: dict[str, SysFan] = {v: k for k, v in FAN_TO_HA.items()}
 
