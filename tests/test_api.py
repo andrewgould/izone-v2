@@ -719,6 +719,24 @@ def test_zone_snapshot_valid() -> None:
     assert not api.zone_snapshot_valid({"Index": 0})
 
 
+@pytest.mark.parametrize(
+    ("zone", "expected"),
+    [
+        ({"ZoneType": 3, "ConstClimate": 0}, True),  # temperature-controlled
+        # Verbatim fields from a constant "Kitchen" zone set up with climate
+        # control: the iZone app shows it a setpoint like any other zone (Oct 2026)
+        ({"ZoneType": 2, "SensType": 3, "Mode": 3, "Setpoint": 2200, "Const": 0,
+          "ConstA": 1, "ConstClimate": 1}, True),
+        ({"ZoneType": 2, "ConstClimate": 0}, False),  # plain constant (bypass) zone
+        ({"ZoneType": 2}, False),
+        ({"ZoneType": 1, "ConstClimate": 1}, False),  # open/close
+        ({}, False),
+    ],
+)
+def test_is_climate_zone(zone, expected) -> None:
+    assert api.is_climate_zone(zone) is expected
+
+
 F = api.SysFan
 
 

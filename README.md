@@ -112,8 +112,8 @@ IP address manually.
 | iZone concept | Home Assistant entity |
 |---|---|
 | AC unit | `climate` — off/cool/heat/heat-cool/fan-only/dry, the fan speeds the unit has (from `FanAutoType`: low/med/high/auto on a 3-speed fan, plus top on a 4-speed one), setpoint (0.5 °C steps, Eco-lock limits respected) |
-| Temperature-controlled zones | `climate` per zone — off (close) / fan-only (open) / heat-cool (climate control) + zone setpoint |
-| Open/close & constant zones | `switch` per zone (on = damper open) |
+| Temperature-controlled zones, and constant zones with climate control (`ConstClimate`) | `climate` per zone — off (close) / fan-only (open) / heat-cool (climate control) + zone setpoint |
+| Open/close zones, and constant zones without climate control | `switch` per zone (on = damper open) |
 | iSave | `switch` (only if the system supports it) |
 | Supply air temperature | `sensor` |
 | Control temperature | `sensor` — the temperature the unit is run from. The spec calls it return air, but on a zone-controlled system it is the control zone's temperature; attribute `control_zone` |

@@ -21,7 +21,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import SysFan, SysMode, ZoneMode, ZoneType, allowed_fans, temp_from_wire
+from .api import (
+    SysFan,
+    SysMode,
+    ZoneMode,
+    allowed_fans,
+    is_climate_zone,
+    temp_from_wire,
+)
 from .coordinator import IZoneConfigEntry, IZoneCoordinator
 from .entity import IZoneEntity, IZoneZoneEntity
 
@@ -81,7 +88,7 @@ async def async_setup_entry(
     entities.extend(
         IZoneZoneClimate(coordinator, zone["Index"])
         for zone in coordinator.data.zones
-        if zone.get("ZoneType") == ZoneType.AUTO
+        if is_climate_zone(zone)
     )
     async_add_entities(entities)
 
@@ -207,7 +214,7 @@ class IZoneAcClimate(IZoneEntity, IZoneClimateMixin):
 
 
 class IZoneZoneClimate(IZoneZoneEntity, IZoneClimateMixin):
-    """A temperature-controlled (ZoneType Auto) zone."""
+    """A temperature-controlled zone, or a constant zone with climate control."""
 
     _attr_name = None  # take the zone-device name
     _attr_supported_features = (
