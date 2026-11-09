@@ -522,6 +522,20 @@ def is_climate_zone(zone: dict[str, Any]) -> bool:
     )
 
 
+def constant_zone_attributes(zone: dict[str, Any]) -> dict[str, Any]:
+    """State attributes for a constant zone, empty for any other.
+
+    ``constant_active`` (``ConstA``) says whether the controller is holding the
+    zone open right now to spill air from zones that have closed.
+    """
+    if _wire_int(zone.get("ZoneType")) != ZoneType.CONSTANT:
+        return {}
+    return {
+        "constant_zone": True,
+        "constant_active": _wire_int(zone.get("ConstA")) != 0,
+    }
+
+
 # FanAutoType_e (iZone_JSON_datastrings.h v1.41) -> the speeds that fan has.
 # Same reading as python-izone: auto disabled means low/med/high only, and an
 # unknown type gets every speed.

@@ -26,6 +26,7 @@ from .api import (
     SysMode,
     ZoneMode,
     allowed_fans,
+    constant_zone_attributes,
     is_climate_zone,
     temp_from_wire,
 )
@@ -242,6 +243,11 @@ class IZoneZoneClimate(IZoneZoneEntity, IZoneClimateMixin):
     @property
     def target_temperature(self) -> float | None:
         return temp_from_wire(self.zone.get("Setpoint"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        # A constant zone with climate control still gets opened to spill air.
+        return constant_zone_attributes(self.zone)
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         mode = {

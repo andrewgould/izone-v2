@@ -8,7 +8,7 @@ from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import ZoneMode, ZoneType, is_climate_zone
+from .api import ZoneMode, ZoneType, constant_zone_attributes, is_climate_zone
 from .coordinator import IZoneConfigEntry, IZoneCoordinator
 from .entity import IZoneEntity, IZoneZoneEntity
 
@@ -49,11 +49,7 @@ class IZoneZoneSwitch(IZoneZoneEntity, SwitchEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        attrs: dict[str, Any] = {}
-        if self.zone.get("ZoneType") == ZoneType.CONSTANT:
-            attrs["constant_zone"] = True
-            attrs["constant_active"] = bool(self.zone.get("ConstA"))
-        return attrs
+        return constant_zone_attributes(self.zone)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         # An explicit command supersedes whatever a scene was still applying.

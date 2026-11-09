@@ -737,6 +737,24 @@ def test_is_climate_zone(zone, expected) -> None:
     assert api.is_climate_zone(zone) is expected
 
 
+
+def test_constant_zone_attributes() -> None:
+    assert api.constant_zone_attributes({"ZoneType": 2, "ConstA": 1}) == {
+        "constant_zone": True,
+        "constant_active": True,
+    }
+    assert api.constant_zone_attributes({"ZoneType": 2, "ConstA": 0}) == {
+        "constant_zone": True,
+        "constant_active": False,
+    }
+    assert api.constant_zone_attributes({"ZoneType": 2}) == {
+        "constant_zone": True,
+        "constant_active": False,
+    }
+    assert api.constant_zone_attributes({"ZoneType": 3, "ConstA": 1}) == {}
+    assert api.constant_zone_attributes({}) == {}
+
+
 F = api.SysFan
 
 
