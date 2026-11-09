@@ -508,6 +508,34 @@ def zone_snapshot_valid(zone: dict[str, Any]) -> bool:
     return _wire_int(zone.get("Mode")) != 0
 
 
+def is_climate_zone(zone: dict[str, Any]) -> bool:
+    """Whether a zone holds its own setpoint, and so gets a climate entity.
+
+    Temperature-controlled zones always do. So does a constant zone with
+    climate control turned on (``ConstClimate``): it runs to its own setpoint
+    like any other, and the controller still opens it to spill air when other
+    zones close.
+    """
+    zone_type = _wire_int(zone.get("ZoneType"))
+    return zone_type == ZoneType.AUTO or (
+        zone_type == ZoneType.CONSTANT and _wire_int(zone.get("ConstClimate")) != 0
+    )
+
+
+def constant_zone_attributes(zone: dict[str, Any]) -> dict[str, Any]:
+    """State attributes for a constant zone, empty for any other.
+
+    ``constant_active`` (``ConstA``) says whether the controller is holding the
+    zone open right now to spill air from zones that have closed.
+    """
+    if _wire_int(zone.get("ZoneType")) != ZoneType.CONSTANT:
+        return {}
+    return {
+        "constant_zone": True,
+        "constant_active": _wire_int(zone.get("ConstA")) != 0,
+    }
+
+
 # FanAutoType_e (iZone_JSON_datastrings.h v1.41) -> the speeds that fan has.
 # Same reading as python-izone: auto disabled means low/med/high only, and an
 # unknown type gets every speed.

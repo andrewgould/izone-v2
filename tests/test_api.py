@@ -719,6 +719,42 @@ def test_zone_snapshot_valid() -> None:
     assert not api.zone_snapshot_valid({"Index": 0})
 
 
+@pytest.mark.parametrize(
+    ("zone", "expected"),
+    [
+        ({"ZoneType": 3, "ConstClimate": 0}, True),  # temperature-controlled
+        # Verbatim fields from a constant "Kitchen" zone set up with climate
+        # control: the iZone app shows it a setpoint like any other zone (Oct 2026)
+        ({"ZoneType": 2, "SensType": 3, "Mode": 3, "Setpoint": 2200, "Const": 0,
+          "ConstA": 1, "ConstClimate": 1}, True),
+        ({"ZoneType": 2, "ConstClimate": 0}, False),  # plain constant (bypass) zone
+        ({"ZoneType": 2}, False),
+        ({"ZoneType": 1, "ConstClimate": 1}, False),  # open/close
+        ({}, False),
+    ],
+)
+def test_is_climate_zone(zone, expected) -> None:
+    assert api.is_climate_zone(zone) is expected
+
+
+
+def test_constant_zone_attributes() -> None:
+    assert api.constant_zone_attributes({"ZoneType": 2, "ConstA": 1}) == {
+        "constant_zone": True,
+        "constant_active": True,
+    }
+    assert api.constant_zone_attributes({"ZoneType": 2, "ConstA": 0}) == {
+        "constant_zone": True,
+        "constant_active": False,
+    }
+    assert api.constant_zone_attributes({"ZoneType": 2}) == {
+        "constant_zone": True,
+        "constant_active": False,
+    }
+    assert api.constant_zone_attributes({"ZoneType": 3, "ConstA": 1}) == {}
+    assert api.constant_zone_attributes({}) == {}
+
+
 F = api.SysFan
 
 
