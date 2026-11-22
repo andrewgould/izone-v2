@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches manifest.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(jq -r .version custom_components/izone_v2/manifest.json)
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME says $tag but manifest.json says $manifest."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Run the tests before publishing anything
+        run: |
+          pip install aiohttp pytest pytest-asyncio
+          pytest tests -q
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The notes are this version's section of CHANGELOG.md. A tag without
+          # one fails rather than publishing a release that says nothing.
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## "v"( |$)" {inside=1; next}
+            /^## / {inside=0}
+            inside {print}
+          ' CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md has no '## ${GITHUB_REF_NAME#v}' section. Write one and re-tag."
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md
