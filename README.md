@@ -73,7 +73,8 @@ airflow limits as services, and diagnostics. This integration adds:
 
 - each zone as its own device, with the zone name as its suggested area
 - damper position, wireless sensor battery and signal strength
-- damper fault, sensor fault and filter warning binary sensors
+- damper fault, sensor fault and filter warning binary sensors, and a button
+  to reset the filter warning after a clean
 - control zone, AC run hours and firmware sensors
 - an iSave switch, a sleep timer number, and zone airflow limits as numbers
 - favourites as scenes, plus a service to edit what a favourite stores
@@ -124,6 +125,7 @@ IP address manually.
 | Wireless sensor battery | `sensor` (full/half/empty, diagnostic) |
 | Wireless sensor signal strength | `sensor` (full/half/quarter/none, diagnostic) |
 | Filter warning, damper fault, sensor fault | `binary_sensor` (diagnostic). The filter warning is the controller's reminder timer running out; attribute `reminder_interval_months` |
+| Reset filter warning | `button` (config) — clears the filter warning after you clean the filter, restarting the reminder timer, the same as the wall controller or iZone app. It reads the system back afterwards and raises an error if the warning is still on |
 | Bridge overloaded | `binary_sensor` (diagnostic) — on when commands are repeatedly failing |
 | Command failures (recent) | `sensor` (diagnostic) — count of failed commands in the last 5 min |
 | Pending zone changes | `sensor` (diagnostic) — zones still being brought to a scene's target; attributes say which and why |
@@ -165,7 +167,7 @@ reports (Settings → Devices → iZone bridge → Download diagnostics).
 
 The integration raises Home Assistant persistent notifications for two things:
 
-- **Filter due for a clean**, while the controller's filter warning is on. It's raised once per warning (dismissing it won't bring it back every poll) and cleared automatically when the warning goes, i.e. after the reminder is reset on the wall controller or in the iZone app.
+- **Filter due for a clean**, while the controller's filter warning is on. It's raised once per warning (dismissing it won't bring it back every poll) and cleared automatically when the warning goes, i.e. after the reminder is reset with the Reset filter warning button, on the wall controller or in the iZone app.
 - **Firmware updated**, when a module's version changes (checked every 6 hours), listing what changed.
 
 Turn them off under the integration's **Configure** options.
@@ -300,6 +302,7 @@ bridge's embedded HTTP server can't handle concurrent requests.
 | Zone setpoint | `{"ZoneSetpoint":{"Index":n,"Setpoint":2250}}` |
 | Favourite *n* state | `POST /iZoneRequestV2` `{"iZoneV2Request":{"Type":3,"No":n,"No1":0}}` |
 | Trigger favourite *n* | `POST /iZoneCommandV2` `{"FavouriteSet":n+1}` (1-9) |
+| Reset filter warning | `{"WarningReset":"filter"}` — not in the HTML reference. `iZone_JSON_datastrings.h` also calls it `ResetWarning`, but that gets `{ERROR}` and does nothing. The real controller clears the warning with an empty reply, so success is judged by reading `Warnings` back |
 
 Commands normally return the literal string `OK` on success. Real bridges also
 reply with v1-style bracing (`{OK}`) and, while still actuating a previous

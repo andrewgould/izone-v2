@@ -357,9 +357,10 @@ class IZoneCoordinator(DataUpdateCoordinator[IZoneData]):
                 "filter",
                 "iZone: filter due for a clean",
                 "The iZone controller says the ducted return-air filter is due a clean"
-                f"{interval}. It's a reminder timer, not a measurement. Reset it on "
-                "the iZone wall controller or in the iZone app after cleaning; this "
-                "notification clears itself when the warning does.",
+                f"{interval}. It's a reminder timer, not a measurement. After cleaning, "
+                "press the iZone \"Reset filter warning\" button (or reset it on the "
+                "wall controller or in the iZone app); this notification clears "
+                "itself when the warning does.",
             )
         elif not due and self._filter_notified:
             persistent_notification.async_dismiss(self.hass, self._notification_id("filter"))

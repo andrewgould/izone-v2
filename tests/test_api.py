@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import izone_api as api
 import pytest
@@ -399,7 +400,10 @@ class MockBridge:
         self,
         command_reply: bytes | list[bytes] = b"{OK}",
         command_fail_times: int = 0,
+        system_bodies: list[bytes] | None = None,
     ) -> None:
+        # System replies, consumed one per request, holding the last entry.
+        self._system_bodies = list(system_bodies) if system_bodies else None
         # Real bridges reply '{OK}', not the documented bare 'OK'. A list
         # is consumed one reply per command call, holding the last entry
         # once exhausted (for simulating BUSY-then-OK sequences).
@@ -419,7 +423,10 @@ class MockBridge:
 
     async def _request(self, request: web.Request) -> web.Response:
         query = (await request.json())["iZoneV2Request"]
-        if query["Type"] == api.REQUEST_SYSTEM:
+        if query["Type"] == api.REQUEST_SYSTEM and self._system_bodies:
+            bodies = self._system_bodies
+            body = bodies.pop(0) if len(bodies) > 1 else bodies[0]
+        elif query["Type"] == api.REQUEST_SYSTEM:
             body = SYSTEM_BODY
         elif query["Type"] == api.REQUEST_ZONE:
             body = ZONE_BODIES[query["No"]]
@@ -773,3 +780,56 @@ F = api.SysFan
 def test_allowed_fans(auto_en, auto_type, expected) -> None:
     system = {"FanAutoEn": auto_en, "FanAutoType": auto_type}
     assert api.allowed_fans(system) == expected
+
+
+def _system_with(warnings: str, mode: int = 1, fan: int = 2) -> bytes:
+    return json.dumps(
+        {
+            "AirStreamDeviceUId": "000013170",
+            "SystemV2": {"SysMode": mode, "SysFan": fan, "Warnings": warnings},
+        }
+    ).encode()
+
+
+async def _reset_filter(mock: MockBridge, monkeypatch) -> tuple[bool, list[bool]]:
+    monkeypatch.setattr(api, "FILTER_RESET_SETTLE", 0)
+    results: list[bool] = []
+    await mock.server.start_server()
+    try:
+        async with ClientSession() as session:
+            client = api.IZoneApi(session, mock.host)
+            client.on_command_result = results.append
+            cleared = await client.async_reset_filter_warning()
+    finally:
+        await mock.server.close()
+    return cleared, results
+
+
+async def test_filter_reset_judged_by_read_back_not_reply(monkeypatch) -> None:
+    # The real controller clears the warning but replies with nothing.
+    mock = MockBridge(command_reply=b"", system_bodies=[_system_with("none")])
+    cleared, results = await _reset_filter(mock, monkeypatch)
+    assert cleared
+    assert mock.commands == [{"WarningReset": "filter"}]
+    assert results == []  # not counted against bridge health
+
+
+async def test_filter_reset_reports_warning_still_on(monkeypatch) -> None:
+    mock = MockBridge(command_reply=b"{OK}", system_bodies=[_system_with("filter")])
+    cleared, _ = await _reset_filter(mock, monkeypatch)
+    assert not cleared
+
+
+async def test_filter_reset_skips_zeroed_snapshots(monkeypatch) -> None:
+    mock = MockBridge(
+        command_reply=b"{ERROR}",
+        system_bodies=[_system_with("", mode=0, fan=0), _system_with("filter")],
+    )
+    cleared, _ = await _reset_filter(mock, monkeypatch)
+    assert not cleared
+
+
+async def test_filter_reset_gives_up_on_only_zeroed_snapshots(monkeypatch) -> None:
+    mock = MockBridge(system_bodies=[_system_with("", mode=0, fan=0)])
+    with pytest.raises(api.IZoneError):
+        await _reset_filter(mock, monkeypatch)
