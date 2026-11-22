@@ -322,3 +322,11 @@ zeroed (`SysOn`, `SysMode`, `SysFan` and the temperatures all `0`, zones with
 values, so such a reply is ignored and the last state kept. If the replies are
 still zeroed after 5 minutes, the controller has probably stopped talking to
 the bridge, and the entities go unavailable.
+
+## Releasing
+
+What changed in each version is in [CHANGELOG.md](CHANGELOG.md). To release:
+
+1. Bump `version` in `custom_components/izone_v2/manifest.json`.
+2. Add a `## X.Y.Z` section to the top of `CHANGELOG.md` saying what changed and why it matters, with any upgrade notes.
+3. Merge to `main`, then push a matching tag (`vX.Y.Z`). The Release workflow checks the tag against the manifest, runs the tests and publishes the release with that changelog section as its notes. It fails if the section is missing.
