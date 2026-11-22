@@ -68,6 +68,11 @@ COMMAND_ENDPOINT = "iZoneCommandV2"
 # (polls) are not paced.
 COMMAND_SETTLE_DELAY = 0.3
 
+# Filter warning reset: wait this long before reading the system back to check
+# the warning cleared, and try this many reads (a zeroed reply doesn't count).
+FILTER_RESET_SETTLE = 2.0
+FILTER_RESET_READS = 3
+
 # iZoneV2Request "Type" values (iZone_JSON_datastrings.h v1.41)
 REQUEST_SYSTEM = 1  # -> {"SystemV2": {...}}
 REQUEST_ZONE = 2  # "No" = zone index -> {"ZonesV2": {...}}
@@ -772,6 +777,31 @@ class IZoneApi:
     def _report_command_result(self, ok: bool) -> None:
         if self.on_command_result is not None:
             self.on_command_result(ok)
+
+    async def async_reset_filter_warning(self) -> bool:
+        """Clear the filter warning after a clean; True once it reads back clear.
+
+        The command is ``{"WarningReset": "filter"}``. It's missing from the
+        HTML reference; iZone_JSON_datastrings.h names it twice, as
+        "WarningReset" (changelog 1.13) and "ResetWarning" (the command block).
+        On the real controller "ResetWarning" gets {ERROR} and changes nothing,
+        while "WarningReset" clears the warning with an empty reply (22 Nov
+        2026). So the reply proves nothing either way: the system is read back,
+        skipping zeroed snapshots, and the warning judged from that. Kept out
+        of the bridge-health count like the favourite edits.
+        """
+        try:
+            await self.async_command({"WarningReset": "filter"}, report=False)
+        except IZoneCommandError as err:
+            _LOGGER.debug("Filter reset reply from %s: %s", self.host, err)
+        for _ in range(FILTER_RESET_READS):
+            await asyncio.sleep(FILTER_RESET_SETTLE)
+            system = (await self.async_get_system())["SystemV2"]
+            if system_snapshot_valid(system):
+                return clean_string(system.get("Warnings")).lower() != "filter"
+        raise IZoneError(
+            f"Bridge {self.host} gave no usable system status after the filter reset"
+        )
 
     async def _send_command(self, payload: dict[str, Any]) -> None:
         """POST a command to /iZoneCommandV2 and verify the OK result.
